@@ -12,21 +12,6 @@ const mainNavItems: NavItem[] = [
         title: 'Dashboard',
         href: '/dashboard',
         icon: LayoutGrid,
-    },
-    {
-        title: 'Utilisateurs',
-        href: '/utilisateurs',
-        icon: Users,
-    },
-    {
-        title: 'Roles',
-        href: '/roles',
-        icon: ShieldBan,
-    },
-    {
-        title: 'Documents',
-        href: '/documents',
-        icon: Folder,
     }
 ];
 

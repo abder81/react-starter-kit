@@ -13,17 +13,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         return Inertia::render('dashboard');
     })->name('dashboard');
 
-    Route::get('utilisateurs', function () {
-        return Inertia::render('users');
-    })->name('utilisateurs');
+    // return the FileManager.tsx's page
+    Route::get('file-manager', function () {
+        return Inertia::render('FileManager');
+    })->name('file-manager');
 
-    Route::get('roles', function () {
-        return Inertia::render('roles');
-    })->name('roles');
-
-    Route::get('documents', function () {
-        return Inertia::render('docs');
-    })->name('documents');
 });
 
 require __DIR__.'/settings.php';

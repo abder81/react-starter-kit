@@ -14,6 +14,8 @@ import { Link, usePage } from '@inertiajs/react';
 import { BookOpen, Folder, LayoutGrid, Menu, Search } from 'lucide-react';
 import AppLogo from './app-logo';
 import AppLogoIcon from './app-logo-icon';
+import { useState } from 'react';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 
 const mainNavItems: NavItem[] = [
     {
@@ -24,16 +26,16 @@ const mainNavItems: NavItem[] = [
 ];
 
 const rightNavItems: NavItem[] = [
-    {
-        title: 'Repository',
-        href: 'https://github.com/laravel/react-starter-kit',
-        icon: Folder,
-    },
-    {
-        title: 'Documentation',
-        href: 'https://laravel.com/docs/starter-kits#react',
-        icon: BookOpen,
-    },
+    // {
+    //     title: 'Repository',
+    //     href: 'https://github.com/laravel/react-starter-kit',
+    //     icon: Folder,
+    // },
+    // {
+    //     title: 'Documentation',
+    //     href: 'https://laravel.com/docs/starter-kits#react',
+    //     icon: BookOpen,
+    // },
 ];
 
 const activeItemStyles = 'text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100';
@@ -42,14 +44,44 @@ interface AppHeaderProps {
     breadcrumbs?: BreadcrumbItem[];
 }
 
+interface SearchOverlayProps {
+    isOpen: boolean;
+    onClose: () => void;
+    searchTerm: string;
+    onSearchChange: (value: string) => void;
+}
+
+function SearchOverlay({ isOpen, onClose, searchTerm, onSearchChange }: SearchOverlayProps) {
+    return (
+        <Dialog open={isOpen} onOpenChange={onClose}>
+            <DialogContent className="sm:max-w-[500px]">
+                <div className="relative w-full">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input
+                        type="text"
+                        placeholder="Rechercher des fichiers..."
+                        value={searchTerm}
+                        onChange={(e) => onSearchChange(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        autoFocus
+                    />
+                </div>
+            </DialogContent>
+        </Dialog>
+    );
+}
+
 export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
     const page = usePage<SharedData>();
     const { auth } = page.props;
     const getInitials = useInitials();
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+
     return (
         <>
             <div className="border-sidebar-border/80 border-b">
-                <div className="mx-auto flex h-16 items-center px-4 md:max-w-7xl">
+                <div className="mx-auto flex h-16 items-center px-4 w-full">
                     {/* Mobile Menu */}
                     <div className="lg:hidden">
                         <Sheet>
@@ -126,9 +158,25 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
 
                     <div className="ml-auto flex items-center space-x-2">
                         <div className="relative flex items-center space-x-1">
-                            <Button variant="ghost" size="icon" className="group h-9 w-9 cursor-pointer">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="group h-9 w-9 cursor-pointer"
+                                onClick={() => setIsSearchOpen(true)}
+                            >
                                 <Search className="!size-5 opacity-80 group-hover:opacity-100" />
                             </Button>
+
+                            <SearchOverlay
+                                isOpen={isSearchOpen}
+                                onClose={() => {
+                                    setIsSearchOpen(false);
+                                    setSearchTerm('');
+                                }}
+                                searchTerm={searchTerm}
+                                onSearchChange={setSearchTerm}
+                            />
+
                             <div className="hidden lg:flex">
                                 {rightNavItems.map((item) => (
                                     <TooltipProvider key={item.title} delayDuration={0}>
@@ -172,7 +220,7 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
             </div>
             {breadcrumbs.length > 1 && (
                 <div className="border-sidebar-border/70 flex w-full border-b">
-                    <div className="mx-auto flex h-12 w-full items-center justify-start px-4 text-neutral-500 md:max-w-7xl">
+                    <div className="flex h-12 w-full items-center justify-start px-4 text-neutral-500">
                         <Breadcrumbs breadcrumbs={breadcrumbs} />
                     </div>
                 </div>
