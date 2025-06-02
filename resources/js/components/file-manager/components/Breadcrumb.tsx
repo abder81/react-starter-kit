@@ -1,7 +1,8 @@
 // src/components/Breadcrumb.tsx
 import React from 'react';
-import { ChevronRight, Home } from 'lucide-react';
+import { ChevronRight, Home, User } from 'lucide-react';
 import { Node } from '../types';
+import { UserDropdown } from '../UserDropdown';
 
 interface BreadcrumbProps {
   selectedPath: string | null;
@@ -9,18 +10,10 @@ interface BreadcrumbProps {
 }
 
 export function Breadcrumb({ selectedPath, onNavigate }: BreadcrumbProps) {
-  if (!selectedPath) {
-    return (
-      <div className="flex items-center gap-2 mb-6">
-        <Home className="h-5 w-5 text-gray-500" />
-        <span className="text-xl font-semibold text-gray-800">Documents</span>
-      </div>
-    );
-  }
 
-  const pathParts = selectedPath.split('/');
+  const pathParts = (selectedPath ?? '').split('/');
   return (
-    <div className="flex items-center gap-2 mb-6 flex-wrap">
+    <div className="flex items-center gap-2 flex-wrap">
       <button
         onClick={() => onNavigate(null)}
         className="flex items-center gap-1 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
@@ -48,6 +41,9 @@ export function Breadcrumb({ selectedPath, onNavigate }: BreadcrumbProps) {
           </div>
         );
       })}
+      <div className='fixed right-0 top-0 flex items-center gap-2 flex-wrap p-4'>
+        <UserDropdown />  
+      </div>
     </div>
   );
 }

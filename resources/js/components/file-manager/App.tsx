@@ -452,7 +452,7 @@ export default function App() {
           <div className="flex items-center justify-between">
             <Breadcrumb selectedPath={selectedPath} onNavigate={setSelectedPath} />
             <div className="flex items-center gap-3">
-              {selectedPath && !isSearching && (
+              {/* {selectedPath && !isSearching && (
                 <div className="flex items-center border border-gray-200 rounded-lg">
                   <button
                     onClick={() => setViewMode('list')}
@@ -473,7 +473,7 @@ export default function App() {
               </button>
               <button className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
                 <SortAsc className="h-4 w-4" />
-              </button>
+              </button> */}
             </div>
           </div>
         </header>
