@@ -3,6 +3,9 @@
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
+use App\Http\Controllers\Api\FolderController;
+use App\Http\Controllers\Api\DocumentController;
+
 Route::get('/', function () {
     return Inertia::render('welcome');
 })->name('home');
@@ -17,6 +20,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('file-manager', function () {
         return Inertia::render('FileManager');
     })->name('file-manager');
+
+    
 
 });
 
