@@ -9,11 +9,11 @@ interface DataTableProps {
   hierarchy: Node[];
   viewMode: 'list' | 'grid';
   onCreateFolder: () => void;
-  onDelete: (paths: string[]) => void;  // Modified to accept array
+  onDelete: (paths: string[]) => void;
   onRename: (path: string) => void;
   onArchive: (path: string) => void;
-  onDownload?: (paths: string[]) => void;  // New prop
-  onPrint?: (paths: string[]) => void;     // New prop
+  onDownload?: (paths: string[]) => void;
+  onPrint?: (paths: string[]) => void;
 }
 
 // Helpers
@@ -32,30 +32,21 @@ const findNode = (nodes: Node[], target: string, cur = ''): Node | null => {
 const getAllFiles = (node: Node): Node[] => {
   const files: Node[] = [];
   const traverse = (cur: Node) => {
-    if (cur.nodes === undefined) {
+    if (cur.nodes === undefined) { // It's a file
       files.push({
+        type: 'file',
+        id: cur.id,
         name: cur.name,
+        full_path: cur.full_path,
         size: cur.size,
         lastModified: cur.lastModified
       });
-    } else {
+    } else { // It's a folder
       cur.nodes.forEach(child => traverse(child));
     }
   };
   traverse(node);
   return files;
-};
-
-const findFullPath = (nodes: Node[], target: string, cur = ''): string | null => {
-  for (const n of nodes) {
-    const p = cur ? `${cur}/${n.name}` : n.name;
-    if (n.name === target) return p;
-    if (n.nodes) {
-      const f = findFullPath(n.nodes, target, p);
-      if (f) return f;
-    }
-  }
-  return null;
 };
 
 export default function DataTable({
@@ -72,7 +63,7 @@ export default function DataTable({
 }: DataTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
 
-  // Modify the row generation logic
+  // Generate rows based on current path
   const { rows, showActions } = useMemo(() => {
     if (!selectedPath) {
       // First-run: show all PS* items under Original
@@ -83,7 +74,7 @@ export default function DataTable({
           rows.push({ 
             ...item, 
             parentPath: `Original/${category.name}`,
-            isTopLevel: true // Add this flag for top-level items
+            isTopLevel: true
           });
         });
       });
@@ -92,6 +83,19 @@ export default function DataTable({
 
     const node = findNode(hierarchy, selectedPath);
     if (!node) return { rows: [], showActions: false };
+    
+    // If node has children (folders), show them with actions enabled
+    if (node.nodes && node.nodes.length > 0) {
+      const hasSubfolders = node.nodes.some(child => child.nodes !== undefined);
+      if (hasSubfolders) {
+        return { 
+          rows: node.nodes.filter(child => child.nodes !== undefined), 
+          showActions: true 
+        };
+      }
+    }
+    
+    // Otherwise show files
     return { 
       rows: getAllFiles(node), 
       showActions: false 
@@ -99,14 +103,16 @@ export default function DataTable({
   }, [selectedPath, hierarchy]);
 
   // Check if all files are selected
-  const allSelected = rows.length > 0 && selectedFiles.length === rows.length;
+  const allSelected = rows.length > 0 && selectedFiles.length === rows.length && !rows.some(r => r.isTopLevel);
   
   // Toggle all files selection
   const toggleAll = () => {
     if (allSelected) {
       setSelectedFiles([]);
     } else {
-      const newSelected = rows.map(row => `${selectedPath}/${row.name}`);
+      const newSelected = rows
+        .filter(row => !row.isTopLevel) // Don't select top-level items
+        .map(row => row.full_path || `${selectedPath}/${row.name}`);
       setSelectedFiles(newSelected);
     }
   };
@@ -142,23 +148,46 @@ export default function DataTable({
     }
   };
 
-  if (viewMode === 'grid' && !showActions) {
-    const handleRowClick = (file: Node): void => {
-      throw new Error('Function not implemented.');
-    };
+  // Handle row click for folders
+  const handleRowClick = (item: Node) => {
+    if (showActions) {
+      const fullPath = item.isTopLevel 
+        ? `${item.parentPath}/${item.name}`
+        : item.full_path || `${selectedPath}/${item.name}`;
+      onSelect(fullPath);
+    }
+  };
 
+  // Grid view for files only
+  if (viewMode === 'grid' && !showActions) {
     return (
       <div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
           {rows.map((file, i) => (
-            <div key={`${file.name}-${i}`} className="group p-4 border border-gray-200 rounded-lg hover:shadow-md hover:border-gray-300 transition-all duration-200 cursor-pointer bg-white" onClick={() => handleRowClick(file)}>
+            <div key={`${file.name}-${i}`} className="group p-4 border border-gray-200 rounded-lg hover:shadow-md hover:border-gray-300 transition-all duration-200 bg-white">
               <div className="flex flex-col items-center text-center">
                 <FileText className="h-12 w-12 text-red-500 mb-2" />
                 <h3 className="text-sm font-medium text-gray-900 truncate w-full" title={file.name}>{file.name}</h3>
                 {file.size && <p className="text-xs text-gray-500 mt-1">{file.size}</p>}
                 <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button className="p-1 hover:bg-gray-100 rounded" onClick={e => e.stopPropagation()}><Eye className="h-4 w-4 text-gray-600" /></button>
-                  <button className="p-1 hover:bg-gray-100 rounded" onClick={e => e.stopPropagation()}><Download className="h-4 w-4 text-gray-600" /></button>
+                  <button 
+                    className="p-1 hover:bg-gray-100 rounded" 
+                    onClick={e => {
+                      e.stopPropagation();
+                      // Handle view action
+                    }}
+                  >
+                    <Eye className="h-4 w-4 text-gray-600" />
+                  </button>
+                  <button 
+                    className="p-1 hover:bg-gray-100 rounded" 
+                    onClick={e => {
+                      e.stopPropagation();
+                      onDownload && onDownload([file.full_path || `${selectedPath}/${file.name}`]);
+                    }}
+                  >
+                    <Download className="h-4 w-4 text-gray-600" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -170,8 +199,8 @@ export default function DataTable({
 
   return (
     <div>
-      {/* Only show bulk actions bar if we're not at top level and have selections */}
-      {selectedFiles.length > 0 && !rows.some(r => r.isTopLevel) && (
+      {/* Bulk actions bar - only show for file listings with selections */}
+      {selectedFiles.length > 0 && !showActions && (
         <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-600">
@@ -179,21 +208,28 @@ export default function DataTable({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleBulkDownload}
-              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
-            >
-              <Download className="h-4 w-4" />
-            </button>
-            <button
-              onClick={handleBulkPrint}
-              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
-            >
-              <Printer className="h-4 w-4" />
-            </button>
+            {onDownload && (
+              <button
+                onClick={handleBulkDownload}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title="Télécharger"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+            )}
+            {onPrint && (
+              <button
+                onClick={handleBulkPrint}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title="Imprimer"
+              >
+                <Printer className="h-4 w-4" />
+              </button>
+            )}
             <button
               onClick={handleBulkDelete}
-              className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded"
+              className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
+              title="Supprimer"
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -205,8 +241,8 @@ export default function DataTable({
         <table className="min-w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {/* Only show checkbox column if not showing top-level items */}
-              {!rows.some(r => r.isTopLevel) && (
+              {/* Only show checkbox column for file listings (not folder listings) */}
+              {!showActions && (
                 <th className="w-12 px-4 py-3">
                   <div className="flex items-center">
                     <input
@@ -229,21 +265,20 @@ export default function DataTable({
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Modifié
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
                 </>
               )}
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {rows.map((row, i) => {
-              const filePath = row.isTopLevel 
+              const filePath = row.full_path || (row.isTopLevel 
                 ? `${row.parentPath}/${row.name}`
-                : `${selectedPath}/${row.name}`;
+                : `${selectedPath}/${row.name}`);
 
               const parentPath = filePath.split('/').slice(0, -1).join('/');
-
               const isSelected = selectedFiles.includes(filePath);
 
               return (
@@ -251,10 +286,11 @@ export default function DataTable({
                   key={`${row.name}-${i}`}
                   className={`hover:bg-gray-50 transition-colors group ${
                     isSelected ? 'bg-blue-50' : ''
-                  } ${showActions ? 'cursor-pointer' : ''}`}  // Add cursor-pointer only for clickable rows
+                  } ${showActions ? 'cursor-pointer' : ''}`}
+                  onClick={() => handleRowClick(row)}
                 >
-                  {/* Only show checkbox cell if not a top-level item */}
-                  {!rows.some(r => r.isTopLevel) && (
+                  {/* Checkbox cell - only for file listings */}
+                  {!showActions && (
                     <td className="w-12 px-4 py-4">
                       <div className="flex items-center">
                         <input
@@ -267,10 +303,9 @@ export default function DataTable({
                       </div>
                     </td>
                   )}
-                  <td
-                    className="px-6 py-4 whitespace-nowrap"
-                    onClick={() => showActions && onSelect(filePath)}
-                  >
+                  
+                  {/* Name cell */}
+                  <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       {showActions ? (
                         <Folder className="h-5 w-5 text-blue-500 mr-3 flex-shrink-0" />
@@ -278,8 +313,8 @@ export default function DataTable({
                         <FileText className="h-5 w-5 text-red-500 mr-3 flex-shrink-0" />
                       )}
                       <div className="flex flex-col">
-                        {/* Only show path for non-top-level items */}
-                        {!row.isTopLevel && (
+                        {/* Show path for files when not at top level */}
+                        {!showActions && !row.isTopLevel && (
                           <span className="text-xs text-gray-400 truncate max-w-md">
                             {parentPath}/
                           </span>
@@ -290,12 +325,20 @@ export default function DataTable({
                       </div>
                     </div>
                   </td>
+                  
+                  {/* Size and Modified columns - only for files */}
                   {!showActions && (
                     <>                
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{row.size || '-'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{row.lastModified || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {row.size || '-'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {row.lastModified || '-'}
+                      </td>
                     </>
                   )}
+                  
+                  {/* Actions cell */}
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end gap-2">
                       {!showActions && (
@@ -304,8 +347,9 @@ export default function DataTable({
                             className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
                             onClick={e => {
                               e.stopPropagation();
-                              onArchive(`${selectedPath}/${row.name}`);
+                              onArchive(filePath);
                             }}
+                            title="Archiver"
                           >
                             <Archive className="h-4 w-4" />
                           </button>
@@ -313,8 +357,9 @@ export default function DataTable({
                             className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
                             onClick={e => {
                               e.stopPropagation();
-                              onRename(`${selectedPath}/${row.name}`);
+                              onRename(filePath);
                             }}
+                            title="Renommer"
                           >
                             <Edit2 className="h-4 w-4" />
                           </button>
@@ -322,8 +367,9 @@ export default function DataTable({
                             className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 rounded transition-colors" 
                             onClick={e => {
                               e.stopPropagation();
-                              onDelete([`${selectedPath}/${row.name}`]);
+                              onDelete([filePath]);
                             }}
+                            title="Supprimer"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -336,6 +382,22 @@ export default function DataTable({
             })}
           </tbody>
         </table>
+        
+        {/* Empty state */}
+        {rows.length === 0 && (
+          <div className="text-center py-12">
+            <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              Aucun {showActions ? 'dossier' : 'fichier'} trouvé
+            </h3>
+            <p className="text-gray-500">
+              {showActions 
+                ? "Ce dossier ne contient aucun sous-dossier" 
+                : "Ce dossier ne contient aucun fichier"
+              }
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

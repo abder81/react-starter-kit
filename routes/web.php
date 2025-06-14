@@ -1,23 +1,38 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
+use App\Models\Folder;
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\FolderController;
+use App\Http\Controllers\DocumentController;
 
 Route::get('/', function () {
     return Inertia::render('welcome');
 })->name('home');
 
 Route::middleware(['auth', 'verified'])->group(function () {
-
+    // Dashboard
     Route::get('dashboard', function () {
-        return Inertia::render('dashboard');
+        $hierarchy = Folder::getHierarchy();
+        return Inertia::render('Dashboard', [
+            'hierarchy' => $hierarchy
+        ]);
     })->name('dashboard');
 
-    // return the FileManager.tsx's page
-    Route::get('file-manager', function () {
-        return Inertia::render('FileManager');
-    })->name('file-manager');
+    // Folder endpoints
+    Route::get('/folders/hierarchy', [FolderController::class, 'hierarchy']);
+    Route::get('/folders/contents', [FolderController::class, 'contents']);
+    Route::post('/folders', [FolderController::class, 'store']);
+    Route::delete('/folders', [FolderController::class, 'destroy']);
 
+    // Document endpoints
+    Route::get('/documents', [DocumentController::class, 'index']);
+    Route::post('/documents', [DocumentController::class, 'store']);
+    Route::put('/documents/{document}', [DocumentController::class, 'update']);
+    Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
+    Route::post('/documents/bulk-delete', [DocumentController::class, 'bulkDelete']);
+    Route::post('/documents/download', [DocumentController::class, 'download']);
+    Route::get('/documents/search', [DocumentController::class, 'search']);
 });
 
 require __DIR__.'/settings.php';

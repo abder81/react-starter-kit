@@ -13,7 +13,7 @@ export function UserDropdown() {
 
   return (
     <div className="">
-      <DropdownMenu>
+      {/* <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="w-full flex items-center gap-3 ">
             <Avatar className="size-8 overflow-hidden rounded-full">
@@ -25,13 +25,13 @@ export function UserDropdown() {
             {/* <div className="flex-1 text-left">
               <p className="text-sm font-medium truncate">{auth.user.name}</p>
               <p className="text-xs text-gray-500 truncate">{auth.user.email}</p>
-            </div> */}
+            </div> 
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-56" align="end">
           <UserMenuContent user={auth.user} />
         </DropdownMenuContent>
-      </DropdownMenu>
+      </DropdownMenu> */}
     </div>
   );
 }

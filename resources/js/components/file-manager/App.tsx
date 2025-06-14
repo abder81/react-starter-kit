@@ -1,8 +1,17 @@
 // src/App.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Filter, Grid3X3, List, SortAsc, Search, FileText, FolderPlus, Upload, Trash2 } from 'lucide-react';
-import { findNode, Node } from './types';
-import { Sidebar, initialHierarchy, searchFiles } from './components/Sidebar';
+import { 
+  findNode, 
+  Node, 
+  updateNodeInHierarchy, 
+  removeNodeInHierarchy, 
+  convertApiToNode,
+  DocumentSearchResult,
+  FolderContentsResponse,
+  ApiFolder
+} from './types';
+import  {Sidebar}  from './components/Sidebar';
 import { Breadcrumb } from './components/Breadcrumb';
 import DataTable from './components/DataTable';
 import Modal from './components/Modal';
@@ -31,7 +40,9 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const [hierarchy, setHierarchy] = useState<Node[]>(initialHierarchy);
+  const [hierarchy, setHierarchy] = useState<Node[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Modal states
   const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
@@ -48,113 +59,252 @@ export default function App() {
   const [fileToRename, setFileToRename] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState('');
 
+  // Search results
+  const [searchResults, setSearchResults] = useState<DocumentSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
   const sidebarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Helper to check if current path allows file uploads (4th level - confidentiality levels)
+  // API functions
+  const fetchHierarchy = async (): Promise<Node[]> => {
+    const response = await fetch('/folders/hierarchy');
+    if (!response.ok) throw new Error('Failed to fetch hierarchy');
+    const data: ApiFolder[] = await response.json();
+    return data.map(convertApiToNode);
+  };
+
+  const fetchFolderContents = async (path: string): Promise<Node[]> => {
+    const response = await fetch(`/folders/contents?path=${encodeURIComponent(path)}`);
+    if (!response.ok) throw new Error('Failed to fetch folder contents');
+    const data: FolderContentsResponse = await response.json();
+    return data.nodes.map(convertApiToNode);
+  };
+
+  const searchDocuments = async (query: string): Promise<DocumentSearchResult[]> => {
+    const response = await fetch(`/documents/search?query=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error('Failed to search documents');
+    return await response.json();
+  };
+
+  const createFolder = async (name: string, parentPath: string): Promise<Node> => {
+    const response = await fetch('/folders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: JSON.stringify({
+        name,
+        parent_path: parentPath,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to create folder');
+    }
+    
+    const folderData = await response.json();
+    return {
+      type: 'folder',
+      id: folderData.id,
+      name: folderData.name,
+      full_path: folderData.full_path,
+      nodes: [],
+      isUserCreated: folderData.is_user_created,
+    };
+  };
+
+  const deleteFolder = async (path: string): Promise<void> => {
+    const response = await fetch('/folders', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: JSON.stringify({ path }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to delete folder');
+    }
+  };
+
+  const uploadFiles = async (files: File[], folderPath: string): Promise<Node[]> => {
+    const formData = new FormData();
+    files.forEach(file => formData.append('files[]', file));
+    formData.append('folder_path', folderPath);
+
+    const response = await fetch('/documents', {
+      method: 'POST',
+      headers: {
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to upload files');
+    }
+
+    const uploadedFiles = await response.json();
+    return uploadedFiles.map((file: any) => ({
+      type: 'file' as const,
+      id: file.id,
+      name: file.name,
+      full_path: folderPath + '/' + file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+    }));
+  };
+
+  const renameDocument = async (documentId: number, newName: string): Promise<void> => {
+    const response = await fetch(`/documents/${documentId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to rename document');
+    }
+  };
+
+  const deleteDocument = async (documentId: number): Promise<void> => {
+    const response = await fetch(`/documents/${documentId}`, {
+      method: 'DELETE',
+      headers: {
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to delete document');
+    }
+  };
+
+  const bulkDeleteDocuments = async (documentIds: number[]): Promise<void> => {
+    const response = await fetch('/documents/bulk-delete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: JSON.stringify({ document_ids: documentIds }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to delete documents');
+    }
+  };
+
+  const downloadDocuments = async (documentIds: number[]): Promise<void> => {
+    const response = await fetch('/documents/download', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+      },
+      body: JSON.stringify({ document_ids: documentIds }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to download documents');
+    }
+
+    // Handle file download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = documentIds.length === 1 ? 'document.pdf' : 'documents.zip';
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  // Load initial hierarchy
+  useEffect(() => {
+    const loadHierarchy = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const hierarchyData = await fetchHierarchy();
+        setHierarchy(hierarchyData);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load hierarchy');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadHierarchy();
+  }, []);
+
+  // Search effect
+  useEffect(() => {
+    const performSearch = async () => {
+      if (searchTerm.length < 3) {
+        setSearchResults([]);
+        return;
+      }
+
+      try {
+        setSearchLoading(true);
+        const results = await searchDocuments(searchTerm);
+        setSearchResults(results);
+      } catch (err) {
+        console.error('Search failed:', err);
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    };
+
+    const timeoutId = setTimeout(performSearch, 300);
+    return () => clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  // Helper to check if current path allows file uploads (5th level - confidentiality levels)
   const canUploadFiles = (path: string | null): boolean => {
     if (!path) return false;
     const parts = path.split('/');
     
     // Must be at 5th level: Original/[Process]/[ProcessCode]/[DocType]/[ConfidentialityLevel]
-    // Example: Original/Pilotage (4)/PSP-01/Procédure/Public
     if (parts.length !== 5) return false;
     if (parts[0] !== 'Original') return false;
     if (!FIRST_LEVEL_ROOTS.includes(parts[1])) return false;
-    // parts[2] is the process code (PSP-01, PSR-05, etc.) - no validation needed
     if (!docTypes.includes(parts[3])) return false;
     if (!confidentialityLevels.includes(parts[4])) return false;
     return true;
   };
 
-  // Helper to replace version suffix
-  const replaceVersionSuffix = (fileName: string, newSuffix: string): string => {
-    const [base, ...extParts] = fileName.split('.');
-    const ext = extParts.join('.');
-    const versionRegex = /_v\d+(?:\.\d+)?$/i;
-    const baseWithoutVersion = base.replace(versionRegex, '');
-    return `${baseWithoutVersion}${newSuffix}.${ext}`;
+  // Protected folders logic
+  const protectedFolders = ['Original', 'Obsolete', ...FIRST_LEVEL_ROOTS];
+  const isProtectedPath = (path: string): boolean => {
+    const parts = path.split('/');
+    if (parts.length === 1) {
+      return protectedFolders.includes(parts[0]);
+    }
+    if ((parts[0] === 'Original' || parts[0] === 'Obsolete') && parts.length === 2) {
+      return FIRST_LEVEL_ROOTS.includes(parts[1]);
+    }
+    return false;
   };
 
-  // Helper to get next version number
-  const getNextVersionNumber = (fileName: string): number => {
-    const versionMatch = fileName.match(/_v(\d+)(?:\.\d+)?$/i);
-    if (!versionMatch) return 1; // First version
-    return parseInt(versionMatch[1], 10) + 1;
-  };
-
-  // Recursively updates the tree to insert a new folder or files
-  const updateNodeInHierarchy = (
-    nodes: Node[],
-    targetPath: string,
-    updater: (node: Node) => Node,
-    currentPath = ''
-  ): Node[] => {
-    return nodes.map(node => {
-      const fullPath = currentPath ? `${currentPath}/${node.name}` : node.name;
-      if (fullPath === targetPath) {
-        return updater(node);
-      }
-      if (node.nodes && targetPath.startsWith(fullPath + '/')) {
-        return {
-          ...node,
-          nodes: updateNodeInHierarchy(node.nodes, targetPath, updater, fullPath),
-        };
-      }
-      return node;
-    });
-  };
-
-  // Remove nodes helper
-  const removeNodeInHierarchy = (
-    nodes: Node[],
-    targetPath: string,
-    currentPath = ''
-  ): Node[] =>
-    nodes
-      .filter(node => {
-        const fullPath = currentPath ? `${currentPath}/${node.name}` : node.name;
-        return fullPath !== targetPath;
-      })
-      .map(node => {
-        const fullPath = currentPath ? `${currentPath}/${node.name}` : node.name;
-        if (node.nodes && targetPath.startsWith(fullPath + '/')) {
-          return {
-            ...node,
-            nodes: removeNodeInHierarchy(node.nodes, targetPath, fullPath),
-          };
-        }
-        return node;
-      });
-
-  // Move file to Obsolete on versioned archives
-  const moveFileToObsolete = (fullPath: string) => {
-    const parts = fullPath.split('/');
-    const fileName = parts.pop()!;
-    const parentPath = parts.join('/');
-    if (!parentPath.startsWith('Original/')) return;
-
-    const versionRegex = /_v(\d+)(?:\.\d+)?$/i;
-    if (!versionRegex.test(fileName)) return;
-
-    const obsoletePath = parentPath.replace('Original/', 'Obsolete/');
-    const fileNode = findNode(hierarchy, fullPath);
-    if (!fileNode) return;
-
-    setHierarchy(prev => removeNodeInHierarchy(prev, fullPath));
-    setHierarchy(prev =>
-      updateNodeInHierarchy(prev, obsoletePath, node => ({
-        ...node,
-        nodes: [...(node.nodes || []), { ...fileNode, name: fileName }],
-      })),
-    );
-  };
+  const isDeleteDisabled = !selectedPath || isProtectedPath(selectedPath);
 
   // Search
-  const searchResults = useMemo(
-    () => (searchTerm.length < 3 ? [] : searchFiles(hierarchy, searchTerm)),
-    [searchTerm, hierarchy],
-  );
   const isSearching = searchTerm.length >= 3;
 
   // Sidebar resizing
@@ -180,201 +330,103 @@ export default function App() {
     };
   }, [isDragging]);
 
-  // Handle upload & archive
-  const handleFileUpload = async (files: File[], isArchive: boolean, version?: string) => {
-    if (!files.length) {
-      throw new Error('No files to upload');
-    }
-
-    if (isArchive && !archiveFilePath) {
-      throw new Error('No archive path specified');
-    }
-
-    if (!isArchive && !selectedPath) {
-      throw new Error('No upload path specified');
-    }
-
-    try {
-      const parentPath = isArchive
-        ? archiveFilePath!.split('/').slice(0, -1).join('/')
-        : selectedPath!;
-
-      const folderNode = findNode(hierarchy, parentPath);
-      if (!folderNode) {
-        throw new Error('Invalid destination folder');
-      }
-
-      const existingNames = folderNode.nodes?.map(n => n.name) || [];
-      const newNodes: Node[] = [];
-
-      for (const file of files) {
-        let finalName: string;
-        
-        if (isArchive) {
-          const originalFileName = archiveFilePath!.split('/').pop()!;
-          const newVersionNumber = version || '1';
-          const lastDotIndex = originalFileName.lastIndexOf('.');
-          const extension = lastDotIndex !== -1 ? originalFileName.substring(lastDotIndex) : '';
-          const nameWithoutExt = lastDotIndex !== -1 
-            ? originalFileName.substring(0, lastDotIndex)
-            : originalFileName;
-          
-          const baseName = nameWithoutExt.replace(/_v[\d.]+$/, '');
-          finalName = `${baseName}_v${newVersionNumber}${extension}`;
-
-          // Move current file to Obsolete if in archive mode
-          if (archiveFilePath) {
-            const obsoletePath = parentPath.replace('Original/', 'Obsolete/');
-            const currentNode = findNode(hierarchy, archiveFilePath);
-            if (currentNode) {
-              setHierarchy(prev => removeNodeInHierarchy(prev, archiveFilePath));
-              setHierarchy(prev =>
-                updateNodeInHierarchy(prev, obsoletePath, node => ({
-                  ...node,
-                  nodes: [...(node.nodes || []), { ...currentNode, name: originalFileName }],
-                })),
-              );
-            }
-          }
-        } else {
-          finalName = file.name;
-          // Check for existing file names - this will be thrown as an error that the form can catch
-          if (existingNames.includes(finalName)) {
-            throw new Error(`Le fichier "${finalName}" existe déjà dans ce dossier`);
-          }
-        }
-
-        newNodes.push({
-          name: finalName,
-          size: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
-          lastModified: new Date().toISOString().split('T')[0],
-        });
-      }
-
-      // Update hierarchy with new files
-      setHierarchy(prev =>
-        updateNodeInHierarchy(prev, parentPath, node => ({
-          ...node,
-          nodes: [...(node.nodes || []), ...newNodes],
-        }))
-      );
-
-    } catch (error) {
-      console.error('File processing failed:', error);
-      throw error;
-    }
-  };
-
   // Handle search result click
-  const handleSearchClick = (r: { name: string; fullPath: string }) => {
-    const parts = r.fullPath.split('/');
+  const handleSearchClick = (result: DocumentSearchResult) => {
+    const parts = result.full_path.split('/');
     parts.pop();
     setSelectedPath(parts.join('/'));
     setSearchTerm('');
   };
 
-  // Create folder
-  const handleCreateFolder = () => {
+  // Create folder handler
+  const handleCreateFolder = async () => {
     if (!selectedPath || !newFolderName.trim()) return;
-    const folderName = newFolderName.trim();
-    const pathParts = selectedPath.split('/');
-    const level = pathParts.length;
-
-    let newFolder: Node;
-    switch (level) {
-      case 1:
-        newFolder = {
-          name: folderName,
-          nodes: docTypes.map(type => ({
-            name: type,
-            nodes: confidentialityLevels.map(level => ({ name: level, nodes: [] })),
-          })),
-          isUserCreated: true,
-        };
-        break;
-      case 2:
-        newFolder = {
-          name: folderName,
-          nodes: confidentialityLevels.map(level => ({ name: level, nodes: [] })),
-          isUserCreated: true,
-        };
-        break;
-      case 3:
-        newFolder = { name: folderName, nodes: [], isUserCreated: true }; 
-        break;
-      default:
-        newFolder = { name: folderName, nodes: [], isUserCreated: true };
+    
+    try {
+      setLoading(true);
+      const newFolder = await createFolder(newFolderName.trim(), selectedPath);
+      
+      setHierarchy(prev =>
+        updateNodeInHierarchy(prev, selectedPath, node => ({
+          ...node,
+          nodes: [...(node.nodes || []), newFolder],
+        }))
+      );
+      
+      setNewFolderName('');
+      setShowCreateFolderModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create folder');
+    } finally {
+      setLoading(false);
     }
-
-    setHierarchy(prev =>
-      updateNodeInHierarchy(prev, selectedPath, node => ({
-        ...node,
-        nodes: [...(node.nodes || []), newFolder],
-      })),
-    );
-    setNewFolderName('');
-    setShowCreateFolderModal(false);
   };
 
-  // Protected folders logic
-  const protectedFolders = ['Original', 'Obsolete', ...FIRST_LEVEL_ROOTS];
-  const isProtectedPath = (path: string): boolean => {
-    const parts = path.split('/');
-    if (parts.length === 1) {
-      return protectedFolders.includes(parts[0]);
-    }
-    if ((parts[0] === 'Original' || parts[0] === 'Obsolete') && parts.length === 2) {
-      return FIRST_LEVEL_ROOTS.includes(parts[1]);
-    }
-    return false;
-  };
-
-  const isDeleteDisabled = !selectedPath || isProtectedPath(selectedPath);
-
-  // Delete folder
-  const handleDeleteFolder = () => {
+  // Delete folder handler
+  const handleDeleteFolder = async () => {
     if (!selectedPath || isProtectedPath(selectedPath)) return;
-    const parentPath = selectedPath.split('/').slice(0, -1).join('/');
-    setHierarchy(prev => removeNodeInHierarchy(prev, selectedPath));
-    setSelectedPath(parentPath);
-    setShowDeleteModal(false);
+    
+    try {
+      setLoading(true);
+      await deleteFolder(selectedPath);
+      
+      const parentPath = selectedPath.split('/').slice(0, -1).join('/');
+      setHierarchy(prev => removeNodeInHierarchy(prev, selectedPath));
+      setSelectedPath(parentPath);
+      setShowDeleteModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete folder');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Delete file
-  const handleDeleteFile = (filePath: string) => {
-    const parentPath = filePath.split('/').slice(0, -1).join('/');
-    if (isProtectedPath(parentPath)) return;
-    setHierarchy(prev => removeNodeInHierarchy(prev, filePath));
+  // Upload handlers
+  const handleFileUpload = async (files: File[], isArchive: boolean, version?: string) => {
+    if (!files.length) {
+      throw new Error('No files to upload');
+    }
+
+    const targetPath = isArchive && archiveFilePath 
+      ? archiveFilePath.split('/').slice(0, -1).join('/')
+      : selectedPath;
+
+    if (!targetPath) {
+      throw new Error('No upload path specified');
+    }
+
+    try {
+      const uploadedFiles = await uploadFiles(files, targetPath);
+      
+      // Update hierarchy with new files
+      setHierarchy(prev =>
+        updateNodeInHierarchy(prev, targetPath, node => ({
+          ...node,
+          nodes: [...(node.nodes || []), ...uploadedFiles],
+        }))
+      );
+
+      // If archiving, move current file to Obsolete
+      if (isArchive && archiveFilePath) {
+        const obsoletePath = targetPath.replace('Original/', 'Obsolete/');
+        const currentNode = findNode(hierarchy, archiveFilePath);
+        if (currentNode) {
+          setHierarchy(prev => removeNodeInHierarchy(prev, archiveFilePath));
+          setHierarchy(prev =>
+            updateNodeInHierarchy(prev, obsoletePath, node => ({
+              ...node,
+              nodes: [...(node.nodes || []), currentNode],
+            }))
+          );
+        }
+      }
+
+    } catch (error) {
+      console.error('File upload failed:', error);
+      throw error;
+    }
   };
 
-  // Rename file
-  const handleRenameFile = (filePath: string) => {
-    setFileToRename(filePath);
-    const currentName = filePath.split('/').pop() || '';
-    setNewFileName(currentName);
-    setShowRenameModal(true);
-  };
-
-  // Confirm rename
-  const handleRenameConfirm = () => {
-    if (!fileToRename || !newFileName.trim()) return;
-    const node = findNode(hierarchy, fileToRename);
-    if (!node) return;
-    const newNode = { ...node, name: newFileName.trim() };
-    const parentPath = fileToRename.split('/').slice(0, -1).join('/');
-    setHierarchy(prev => removeNodeInHierarchy(prev, fileToRename));
-    setHierarchy(prev =>
-      updateNodeInHierarchy(prev, parentPath, node => ({
-        ...node,
-        nodes: [...(node.nodes || []), newNode],
-      })),
-    );
-    setShowRenameModal(false);
-    setFileToRename(null);
-    setNewFileName('');
-  };
-
-  // Upload / Archive handlers
   const handleUploadClick = () => {
     setArchiveMode(false);
     setShowUploadModal(true);
@@ -386,42 +438,114 @@ export default function App() {
     setShowUploadModal(true);
   };
 
-  // Replace the existing upload modal section with this updated version
   const handleUploadSubmit = async (files: File[], isArchive: boolean, version: string) => {
     try {
-      // Set the states before processing
       setFilesToUpload(files);
       setArchiveMode(isArchive);
       
       await handleFileUpload(files, isArchive, version);
       
-      // On success, close modal and reset states
       setShowUploadModal(false);
       setFilesToUpload([]);
       setArchiveMode(false);
       setArchiveFilePath(null);
     } catch (error) {
       console.error('Upload/Archive failed:', error);
-      // Error handling - modal stays open, error will be handled by the form
-      throw error; // Re-throw so the form can handle the error
+      throw error;
+    }
+  };
+
+  // File operations
+  const handleDeleteFile = async (filePath: string) => {
+    const node = findNode(hierarchy, filePath);
+    if (!node || node.type !== 'file') return;
+
+    try {
+      await deleteDocument(node.id);
+      setHierarchy(prev => removeNodeInHierarchy(prev, filePath));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete file');
+    }
+  };
+
+  const handleRenameFile = (filePath: string) => {
+    setFileToRename(filePath);
+    const currentName = filePath.split('/').pop() || '';
+    setNewFileName(currentName);
+    setShowRenameModal(true);
+  };
+
+  const handleRenameConfirm = async () => {
+    if (!fileToRename || !newFileName.trim()) return;
+    
+    const node = findNode(hierarchy, fileToRename);
+    if (!node || node.type !== 'file') return;
+
+    try {
+      await renameDocument(node.id, newFileName.trim());
+      
+      const newNode = { ...node, name: newFileName.trim() };
+      const parentPath = fileToRename.split('/').slice(0, -1).join('/');
+      
+      setHierarchy(prev => removeNodeInHierarchy(prev, fileToRename));
+      setHierarchy(prev =>
+        updateNodeInHierarchy(prev, parentPath, node => ({
+          ...node,
+          nodes: [...(node.nodes || []), newNode],
+        }))
+      );
+      
+      setShowRenameModal(false);
+      setFileToRename(null);
+      setNewFileName('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to rename file');
     }
   };
 
   // Bulk actions
   const handleBulkDelete = async (paths: string[]) => {
-    if (window.confirm(`Êtes-vous sûr de vouloir supprimer ${paths.length} fichier(s) ?`)) {
-      paths.forEach(path => {
-        const parentPath = path.split('/').slice(0, -1).join('/');
-        if (!isProtectedPath(parentPath)) {
+    const fileNodes: Node[] = [];
+    paths.forEach(path => {
+      const node = findNode(hierarchy, path);
+      if (node && node.type === 'file') {
+        fileNodes.push(node);
+      }
+    });
+
+    if (fileNodes.length === 0) return;
+
+    if (window.confirm(`Êtes-vous sûr de vouloir supprimer ${fileNodes.length} fichier(s) ?`)) {
+      try {
+        const documentIds = fileNodes.map(node => node.id);
+        await bulkDeleteDocuments(documentIds);
+        
+        paths.forEach(path => {
           setHierarchy(prev => removeNodeInHierarchy(prev, path));
-        }
-      });
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete files');
+      }
     }
   };
 
-  const handleBulkDownload = (paths: string[]) => {
-    // Implement your download logic here
-    console.log('Downloading files:', paths);
+  const handleBulkDownload = async (paths: string[]) => {
+    const fileNodes: Node[] = [];
+    paths.forEach(path => {
+      const node = findNode(hierarchy, path);
+      if (node && node.type === 'file') {
+        fileNodes.push(node);
+      }
+    });
+
+    if (fileNodes.length === 0) return;
+
+    try {
+      const documentIds = fileNodes.map(node => node.id);
+      await downloadDocuments(documentIds);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to download files');
+    }
   };
 
   const handleBulkPrint = (paths: string[]) => {
@@ -429,54 +553,62 @@ export default function App() {
     console.log('Printing files:', paths);
   };
 
-  // Debugging logs
-  console.log('Current path:', selectedPath);
-  console.log('Can upload:', canUploadFiles(selectedPath));
+  // Add state for managing hierarchy updates
+  const onUpdateHierarchy = (updater: (hierarchy: Node[]) => Node[]) => {
+    setHierarchy(updater(hierarchy));
+  };
+
+  if (loading && hierarchy.length === 0) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-50">
+      {error && (
+        <div className="fixed top-4 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded z-50">
+          <button
+            onClick={() => setError(null)}
+            className="float-right ml-2 text-red-700 hover:text-red-900"
+          >
+            ×
+          </button>
+          {error}
+        </div>
+      )}
+      
       <aside
         ref={sidebarRef}
-        className="flex-none border-r border-gray-200 bg-white shadow-sm flex flex-col" // Added flex flex-col
+        className="flex-none border-r border-gray-200 bg-white shadow-sm flex flex-col"
         style={{ width: sidebarWidth }}
       >
-        <Sidebar selectedPath={selectedPath} onSelect={setSelectedPath} hierarchy={hierarchy} />
-        
+        <Sidebar 
+          selectedPath={selectedPath} 
+          onSelect={setSelectedPath} 
+          hierarchy={hierarchy}
+          loading={loading}
+          onUpdateHierarchy={onUpdateHierarchy}
+        />
       </aside>
+      
       <div
         className="w-1 hover:w-2 bg-gray-200 hover:bg-blue-300 cursor-ew-resize transition-all duration-150"
         onMouseDown={() => setIsDragging(true)}
       />
+      
       <main className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between">
             <Breadcrumb selectedPath={selectedPath} onNavigate={setSelectedPath} />
-            <div className="flex items-center gap-3">
-              {/* {selectedPath && !isSearching && (
-                <div className="flex items-center border border-gray-200 rounded-lg">
-                  <button
-                    onClick={() => setViewMode('list')}
-                    className={`p-2 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900' : 'text-gray-500'} hover:text-gray-700 transition-colors`}
-                  >
-                    <List className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode('grid')}
-                    className={`p-2 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900' : 'text-gray-500'} hover:text-gray-700 transition-colors`}
-                  >
-                    <Grid3X3 className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
-              <button className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                <Filter className="h-4 w-4" />
-              </button>
-              <button className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                <SortAsc className="h-4 w-4" />
-              </button> */}
-            </div>
           </div>
         </header>
+        
         <div className="flex-1 overflow-auto p-6">
           <div className="mb-6 flex items-center justify-between">
             <div className="relative w-[450px]">
@@ -488,7 +620,13 @@ export default function App() {
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+              {searchLoading && (
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                </div>
+              )}
             </div>
+            
             {selectedPath && !isSearching && (
               <div className="flex items-center gap-2">
                 <button
@@ -508,7 +646,6 @@ export default function App() {
                   <Trash2 className="h-4 w-4" /> Supprimer dossier
                 </button>
 
-                {/* Upload button with correct visibility condition */}
                 {canUploadFiles(selectedPath) && (
                   <button
                     onClick={handleUploadClick}
@@ -517,11 +654,11 @@ export default function App() {
                     <Upload className="h-4 w-4" /> Télécharger fichier
                   </button>
                 )}
-                
               </div>
             )}
           </div>
-          {/* Rest of the component content */}
+
+          {/* Search Results */}
           {isSearching ? (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">
@@ -529,23 +666,23 @@ export default function App() {
               </h3>
               {searchResults.length === 0 ? (
                 <p className="text-gray-500">
-                  Aucun fichier trouvé pour « {searchTerm} »
+                  {searchLoading ? 'Recherche en cours...' : `Aucun fichier trouvé pour « ${searchTerm} »`}
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {searchResults.map((r, i) => (
+                  {searchResults.map((result, i) => (
                     <div
                       key={i}
                       className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
-                      onClick={() => handleSearchClick(r)}
+                      onClick={() => handleSearchClick(result)}
                     >
                       <FileText className="h-5 w-5 text-red-500 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-gray-900 truncate">
-                          {r.name}
+                          {result.name}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
-                          {r.fullPath}
+                          {result.full_path}
                         </div>
                       </div>
                     </div>
@@ -554,28 +691,39 @@ export default function App() {
               )}
             </div>
           ) : (
-            <DataTable
-              selectedPath={selectedPath}
-              onSelect={setSelectedPath}
-              hierarchy={hierarchy}
-              viewMode={viewMode}
-              onCreateFolder={() => setShowCreateFolderModal(true)}
-              onDelete={handleBulkDelete}
-              onRename={handleRenameFile}
-              onArchive={handleArchiveClick}
-              onDownload={handleBulkDownload}
-              onPrint={handleBulkPrint}
-            />
+            /* Main Content */
+            selectedPath ? (
+              <DataTable
+                selectedPath={selectedPath}
+                onSelect={setSelectedPath}
+                hierarchy={hierarchy}
+                viewMode={viewMode}
+                onCreateFolder={() => setShowCreateFolderModal(true)}
+                onDelete={handleBulkDelete}        // Uncomment this
+                onRename={handleRenameFile}
+                onArchive={handleArchiveClick}
+                onDownload={handleBulkDownload}    // Uncomment this
+                onPrint={handleBulkPrint}          // Uncomment this
+              />
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+                <FileText className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  Sélectionnez un dossier
+                </h3>
+                <p className="text-gray-500">
+                  Choisissez un dossier dans la barre latérale pour voir son contenu
+                </p>
+              </div>
+            )
           )}
         </div>
       </main>
+
       {/* Create Folder Modal */}
       <Modal
         isOpen={showCreateFolderModal}
-        onClose={() => {
-          setShowCreateFolderModal(false);
-          setNewFolderName('');
-        }}
+        onClose={() => setShowCreateFolderModal(false)}
         title="Créer un nouveau dossier"
       >
         <div className="space-y-4">
@@ -586,19 +734,15 @@ export default function App() {
             <input
               type="text"
               value={newFolderName}
-              onChange={e => setNewFolderName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Entrer le nom du dossier..."
-              onKeyPress={e => e.key === 'Enter' && handleCreateFolder()}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Entrez le nom du dossier"
               autoFocus
             />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-4">
             <button
-              onClick={() => {
-                setShowCreateFolderModal(false);
-                setNewFolderName('');
-              }}
+              onClick={() => setShowCreateFolderModal(false)}
               className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
             >
               Annuler
@@ -613,30 +757,6 @@ export default function App() {
           </div>
         </div>
       </Modal>
-      
-      {/* Upload / Archive Modal */}
-      <Modal
-        isOpen={showUploadModal}
-        onClose={() => {
-          setShowUploadModal(false);
-          setFilesToUpload([]);
-          setArchiveMode(false);
-          setArchiveFilePath(null);
-        }}
-        title={archiveMode ? "Archiver Fichier" : "Télécharger Fichier"}
-      >
-        <UploadArchiveForm
-          onSubmit={handleUploadSubmit} 
-          onCancel={() => {
-            setShowUploadModal(false);
-            setFilesToUpload([]);
-            setArchiveMode(false);
-            setArchiveFilePath(null);
-          }}
-          currentFileName={archiveFilePath?.split('/').pop()}
-          initialArchiveMode={archiveMode}
-        />
-      </Modal>
 
       {/* Delete Folder Modal */}
       <Modal
@@ -646,9 +766,11 @@ export default function App() {
       >
         <div className="space-y-4">
           <p className="text-gray-600">
-            Êtes-vous sûr de vouloir supprimer ce dossier ? Cette action est irréversible.
+            Êtes-vous sûr de vouloir supprimer le dossier{' '}
+            <span className="font-medium">{selectedPath?.split('/').pop()}</span> ?
+            Cette action est irréversible.
           </p>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-4">
             <button
               onClick={() => setShowDeleteModal(false)}
               className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
@@ -668,11 +790,7 @@ export default function App() {
       {/* Rename File Modal */}
       <Modal
         isOpen={showRenameModal}
-        onClose={() => {
-          setShowRenameModal(false);
-          setFileToRename(null);
-          setNewFileName('');
-        }}
+        onClose={() => setShowRenameModal(false)}
         title="Renommer le fichier"
       >
         <div className="space-y-4">
@@ -683,19 +801,15 @@ export default function App() {
             <input
               type="text"
               value={newFileName}
-              onChange={e => setNewFileName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Entrer le nouveau nom..."
+              onChange={(e) => setNewFileName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Entrez le nouveau nom"
               autoFocus
             />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-4">
             <button
-              onClick={() => {
-                setShowRenameModal(false);
-                setFileToRename(null);
-                setNewFileName('');
-              }}
+              onClick={() => setShowRenameModal(false)}
               className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
             >
               Annuler
@@ -710,6 +824,33 @@ export default function App() {
           </div>
         </div>
       </Modal>
+
+      {/* Upload/Archive Modal */}
+      {/* <Modal
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        title={archiveMode ? "Archiver et remplacer" : "Télécharger des fichiers"}
+        // size="lg"
+      >
+        <UploadArchiveForm
+          isArchive={archiveMode}
+          currentFilePath={archiveFilePath}
+          onSubmit={handleUploadSubmit}
+          onCancel={() => setShowUploadModal(false)}
+        />
+      </Modal> */}
+
+      {/* Hidden file input for upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          setFilesToUpload(files);
+        }}
+      />
     </div>
   );
 }

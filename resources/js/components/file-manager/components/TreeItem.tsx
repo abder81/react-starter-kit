@@ -15,14 +15,16 @@ const contains = (
   );
 };
 
-// Add this type guard at the top of the file
-const isFolder = (node: Node): boolean => Array.isArray(node.nodes);
+// Type guard to check if a node is a folder
+const isFolder = (node: Node): boolean => node.type === 'folder';
 
 interface TreeItemProps {
   node: Node;
   path: string;
   selectedPath: string | null;
   onSelect: (path: string) => void;
+  onLoadChildren?: (path: string) => Promise<void>;
+  loading?: boolean;
 }
 
 export const TreeItem = memo(function TreeItem({
@@ -30,12 +32,14 @@ export const TreeItem = memo(function TreeItem({
   path,
   selectedPath,
   onSelect,
+  onLoadChildren,
+  loading = false,
 }: TreeItemProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isLoadingChildren, setIsLoadingChildren] = useState(false);
 
-  // Replace the folderChildren definition in TreeItem component:
+  // Only show folder children in the tree
   const folderChildren = isFolder(node) ? node.nodes?.filter(isFolder) ?? [] : [];
-
   const hasVisibleChildren = folderChildren.length > 0;
   const isSelected = path === selectedPath;
 
@@ -46,15 +50,45 @@ export const TreeItem = memo(function TreeItem({
     }
   }, [selectedPath, node, path]);
 
-  const handleToggle = (e: React.MouseEvent) => {
+  const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    
+    if (!isOpen && onLoadChildren && isFolder(node)) {
+      // Load children if not already loaded and we're opening
+      if (!node.nodes || node.nodes.length === 0) {
+        setIsLoadingChildren(true);
+        try {
+          await onLoadChildren(path);
+        } catch (error) {
+          console.error('Failed to load children:', error);
+        } finally {
+          setIsLoadingChildren(false);
+        }
+      }
+    }
+    
     setIsOpen(open => !open);
   };
 
-  const handleSelect = () => {
+  const handleSelect = async () => {
     onSelect(path);
-    if (hasVisibleChildren) {
-      setIsOpen(true);
+    
+    if (isFolder(node)) {
+      // Load children if not already loaded
+      if (onLoadChildren && (!node.nodes || node.nodes.length === 0)) {
+        setIsLoadingChildren(true);
+        try {
+          await onLoadChildren(path);
+        } catch (error) {
+          console.error('Failed to load children:', error);
+        } finally {
+          setIsLoadingChildren(false);
+        }
+      }
+      
+      if (hasVisibleChildren || (node.nodes && node.nodes.length > 0)) {
+        setIsOpen(true);
+      }
     }
   };
 
@@ -80,22 +114,27 @@ export const TreeItem = memo(function TreeItem({
         }`}
         onClick={handleSelect}
       >
-        {hasVisibleChildren && (
+        {isFolder(node) && (
           <button
             onClick={handleToggle}
             className="p-0.5 rounded hover:bg-gray-200 transition-colors"
+            disabled={isLoadingChildren}
           >
-            <ChevronRight
-              className={`h-3 w-3 text-gray-400 transition-transform duration-200 ${
-                isOpen ? 'rotate-90' : ''
-              }`}
-            />
+            {isLoadingChildren ? (
+              <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+            ) : (
+              <ChevronRight
+                className={`h-3 w-3 text-gray-400 transition-transform duration-200 ${
+                  isOpen ? 'rotate-90' : ''
+                }`}
+              />
+            )}
           </button>
         )}
 
         <div
           className={`flex items-center gap-2 flex-1 min-w-0 ${
-            !hasVisibleChildren ? 'ml-5' : ''
+            !isFolder(node) ? 'ml-5' : ''
           }`}
         >
           {getNodeIcon()}
@@ -115,11 +154,13 @@ export const TreeItem = memo(function TreeItem({
           <ul className="space-y-0.5">
             {folderChildren.map(child => (
               <TreeItem
-                key={child.name}
+                key={child.id}
                 node={child}
                 path={`${path}/${child.name}`}
                 selectedPath={selectedPath}
                 onSelect={onSelect}
+                onLoadChildren={onLoadChildren}
+                loading={loading}
               />
             ))}
           </ul>
