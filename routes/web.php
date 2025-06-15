@@ -22,6 +22,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // Folder endpoints
     Route::get('/folders/hierarchy', [FolderController::class, 'hierarchy']);
     Route::get('/folders/contents', [FolderController::class, 'contents']);
+    Route::get('/folders/configurations', [FolderController::class, 'configurations']);
     Route::post('/folders', [FolderController::class, 'store']);
     Route::delete('/folders', [FolderController::class, 'destroy']);
 

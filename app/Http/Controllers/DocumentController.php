@@ -7,6 +7,7 @@ use App\Models\Folder;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use ZipArchive;
@@ -147,20 +148,40 @@ class DocumentController extends Controller
      */
     public function bulkDelete(Request $request): JsonResponse
     {
-        $request->validate(['document_ids' => 'required|array']);
+        try {
+            $request->validate(['document_ids' => 'required|array']);
 
-        $docs = Document::whereIn('id', $request->document_ids)->get();
+            Log::info('Bulk delete request received', ['document_ids' => $request->document_ids]);
 
-        DB::transaction(function() use ($docs) {
-            $docs->each(function($d) {
-                if (Storage::disk('private')->exists($d->file_path)) {
-                    Storage::disk('private')->delete($d->file_path);
-                }
+            $docs = Document::whereIn('id', $request->document_ids)->get();
+            Log::info('Found documents to delete', ['count' => $docs->count()]);
+
+            DB::transaction(function() use ($docs) {
+                $docs->each(function($d) {
+                    Log::info('Processing document for deletion', [
+                        'id' => $d->id,
+                        'file_path' => $d->file_path
+                    ]);
+                    
+                    if (Storage::disk('private')->exists($d->file_path)) {
+                        Storage::disk('private')->delete($d->file_path);
+                        Log::info('File deleted from storage', ['path' => $d->file_path]);
+                    } else {
+                        Log::warning('File not found in storage', ['path' => $d->file_path]);
+                    }
+                });
+                $docs->each->delete();
+                Log::info('Documents deleted from database');
             });
-            $docs->each->delete();
-        });
 
-        return response()->json(['message' => 'Bulk deleted']);
+            return response()->json(['message' => 'Bulk deleted']);
+        } catch (\Exception $e) {
+            Log::error('Bulk delete failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
     }
 
     /**

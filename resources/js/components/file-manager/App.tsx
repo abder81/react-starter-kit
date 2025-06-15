@@ -26,10 +26,19 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { MoreVertical } from 'lucide-react';
 
-// Constants
-const FIRST_LEVEL_ROOTS = ['Pilotage (4)', 'Réalisation (6)', 'Support (7)'];
-const docTypes = ['Procédure', 'Charte', 'Guide', 'Politique', 'Enregistrement'];
-const confidentialityLevels = ['Interne', 'Public', 'Restreint', 'Confidentiel', 'Strictement Confidentiel'];
+// Helper function to get CSRF token
+const getCsrfToken = () => {
+  return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+};
+
+// Helper function to get default headers
+const getDefaultHeaders = () => {
+  return {
+    'Content-Type': 'application/json',
+    'X-CSRF-TOKEN': getCsrfToken(),
+    'Accept': 'application/json',
+  };
+};
 
 export default function App() {
   const MIN_WIDTH = 280;
@@ -43,6 +52,11 @@ export default function App() {
   const [hierarchy, setHierarchy] = useState<Node[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Configuration states
+  const [rootCategories, setRootCategories] = useState<string[]>([]);
+  const [docTypes, setDocTypes] = useState<string[]>([]);
+  const [confidentialityLevels, setConfidentialityLevels] = useState<string[]>([]);
 
   // Modal states
   const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
@@ -66,171 +80,255 @@ export default function App() {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Load configurations
+  useEffect(() => {
+    const loadConfigurations = async () => {
+      try {
+        const response = await fetch('/folders/configurations');
+        if (!response.ok) {
+          throw new Error('Failed to fetch configurations');
+        }
+        const data = await response.json();
+        setRootCategories(data.rootCategories);
+        setDocTypes(data.documentTypes);
+        setConfidentialityLevels(data.confidentialityLevels);
+      } catch (error) {
+        console.error('Error loading configurations:', error);
+        setError('Failed to load folder configurations');
+      }
+    };
+
+    loadConfigurations();
+  }, []);
+
   // API functions
   const fetchHierarchy = async (): Promise<Node[]> => {
-    const response = await fetch('/folders/hierarchy');
-    if (!response.ok) throw new Error('Failed to fetch hierarchy');
-    const data: ApiFolder[] = await response.json();
-    return data.map(convertApiToNode);
+    try {
+      const response = await fetch('/folders/hierarchy', {
+        headers: getDefaultHeaders(),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch hierarchy');
+      }
+      
+      const data = await response.json();
+      console.log('Received hierarchy data:', data);
+      
+      // Ensure data is an array
+      if (!Array.isArray(data)) {
+        console.error('Invalid hierarchy data:', data);
+        throw new Error('Invalid hierarchy data received from server');
+      }
+
+      // Convert each item in the array
+      return data.map(item => {
+        try {
+          if (!item || typeof item !== 'object') {
+            throw new Error('Invalid item in hierarchy data');
+          }
+          return convertApiToNode(item);
+        } catch (error) {
+          console.error('Error converting node:', item, error);
+          throw new Error('Failed to convert hierarchy node');
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching hierarchy:', error);
+      throw error;
+    }
   };
 
   const fetchFolderContents = async (path: string): Promise<Node[]> => {
-    const response = await fetch(`/folders/contents?path=${encodeURIComponent(path)}`);
-    if (!response.ok) throw new Error('Failed to fetch folder contents');
-    const data: FolderContentsResponse = await response.json();
-    return data.nodes.map(convertApiToNode);
+    try {
+      const response = await fetch(`/folders/contents?path=${encodeURIComponent(path)}`, {
+        headers: getDefaultHeaders(),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch folder contents');
+      }
+      const data: FolderContentsResponse = await response.json();
+      return data.nodes.map(convertApiToNode);
+    } catch (error) {
+      console.error('Error fetching folder contents:', error);
+      throw error;
+    }
   };
 
   const searchDocuments = async (query: string): Promise<DocumentSearchResult[]> => {
-    const response = await fetch(`/documents/search?query=${encodeURIComponent(query)}`);
-    if (!response.ok) throw new Error('Failed to search documents');
-    return await response.json();
+    try {
+      const response = await fetch(`/documents/search?query=${encodeURIComponent(query)}`, {
+        headers: getDefaultHeaders(),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to search documents');
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Error searching documents:', error);
+      throw error;
+    }
   };
 
   const createFolder = async (name: string, parentPath: string): Promise<Node> => {
-    const response = await fetch('/folders', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: JSON.stringify({
-        name,
-        parent_path: parentPath,
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to create folder');
+    try {
+      const response = await fetch('/folders', {
+        method: 'POST',
+        headers: getDefaultHeaders(),
+        body: JSON.stringify({
+          name,
+          parent_path: parentPath,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create folder');
+      }
+      
+      const folderData = await response.json();
+      return convertApiToNode(folderData);
+    } catch (error) {
+      console.error('Error creating folder:', error);
+      throw error;
     }
-    
-    const folderData = await response.json();
-    return {
-      type: 'folder',
-      id: folderData.id,
-      name: folderData.name,
-      full_path: folderData.full_path,
-      nodes: [],
-      isUserCreated: folderData.is_user_created,
-    };
   };
 
   const deleteFolder = async (path: string): Promise<void> => {
-    const response = await fetch('/folders', {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: JSON.stringify({ path }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to delete folder');
+    try {
+      const response = await fetch('/folders', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': getCsrfToken(),
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ path }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 403) {
+          throw new Error('Ce dossier ne peut pas être supprimé car il est protégé');
+        }
+        throw new Error(errorData.error || 'Failed to delete folder');
+      }
+    } catch (error) {
+      console.error('Error deleting folder:', error);
+      throw error;
     }
   };
 
   const uploadFiles = async (files: File[], folderPath: string): Promise<Node[]> => {
-    const formData = new FormData();
-    files.forEach(file => formData.append('files[]', file));
-    formData.append('folder_path', folderPath);
+    try {
+      const formData = new FormData();
+      files.forEach(file => formData.append('files[]', file));
+      formData.append('folder_path', folderPath);
 
-    const response = await fetch('/documents', {
-      method: 'POST',
-      headers: {
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: formData,
-    });
+      const response = await fetch('/documents', {
+        method: 'POST',
+        headers: {
+          'X-CSRF-TOKEN': getCsrfToken(),
+          'Accept': 'application/json',
+        },
+        body: formData,
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to upload files');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to upload files');
+      }
+
+      const uploadedFiles = await response.json();
+      return uploadedFiles.map((file: any) => convertApiToNode(file));
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      throw error;
     }
-
-    const uploadedFiles = await response.json();
-    return uploadedFiles.map((file: any) => ({
-      type: 'file' as const,
-      id: file.id,
-      name: file.name,
-      full_path: folderPath + '/' + file.name,
-      size: file.size,
-      lastModified: file.lastModified,
-    }));
   };
 
   const renameDocument = async (documentId: number, newName: string): Promise<void> => {
-    const response = await fetch(`/documents/${documentId}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: JSON.stringify({ name: newName }),
-    });
+    try {
+      const response = await fetch(`/documents/${documentId}`, {
+        method: 'PUT',
+        headers: getDefaultHeaders(),
+        body: JSON.stringify({ name: newName }),
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to rename document');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to rename document');
+      }
+    } catch (error) {
+      console.error('Error renaming document:', error);
+      throw error;
     }
   };
 
   const deleteDocument = async (documentId: number): Promise<void> => {
-    const response = await fetch(`/documents/${documentId}`, {
-      method: 'DELETE',
-      headers: {
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-    });
+    try {
+      const response = await fetch(`/documents/${documentId}`, {
+        method: 'DELETE',
+        headers: getDefaultHeaders(),
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to delete document');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete document');
+      }
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      throw error;
     }
   };
 
   const bulkDeleteDocuments = async (documentIds: number[]): Promise<void> => {
-    const response = await fetch('/documents/bulk-delete', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: JSON.stringify({ document_ids: documentIds }),
-    });
+    try {
+      const response = await fetch('/documents/bulk-delete', {
+        method: 'POST',
+        headers: getDefaultHeaders(),
+        body: JSON.stringify({ document_ids: documentIds }),
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to delete documents');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete documents');
+      }
+    } catch (error) {
+      console.error('Error bulk deleting documents:', error);
+      throw error;
     }
   };
 
   const downloadDocuments = async (documentIds: number[]): Promise<void> => {
-    const response = await fetch('/documents/download', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-      },
-      body: JSON.stringify({ document_ids: documentIds }),
-    });
+    try {
+      const response = await fetch('/documents/download', {
+        method: 'POST',
+        headers: getDefaultHeaders(),
+        body: JSON.stringify({ document_ids: documentIds }),
+      });
 
-    if (!response.ok) {
-      throw new Error('Failed to download documents');
+      if (!response.ok) {
+        throw new Error('Failed to download documents');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = documentIds.length === 1 ? 'document.pdf' : 'documents.zip';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Error downloading documents:', error);
+      throw error;
     }
-
-    // Handle file download
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = documentIds.length === 1 ? 'document.pdf' : 'documents.zip';
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
   };
 
   // Load initial hierarchy
@@ -283,22 +381,27 @@ export default function App() {
     // Must be at 5th level: Original/[Process]/[ProcessCode]/[DocType]/[ConfidentialityLevel]
     if (parts.length !== 5) return false;
     if (parts[0] !== 'Original') return false;
-    if (!FIRST_LEVEL_ROOTS.includes(parts[1])) return false;
+    if (!rootCategories.includes(parts[1])) return false;
     if (!docTypes.includes(parts[3])) return false;
     if (!confidentialityLevels.includes(parts[4])) return false;
     return true;
   };
 
   // Protected folders logic
-  const protectedFolders = ['Original', 'Obsolete', ...FIRST_LEVEL_ROOTS];
   const isProtectedPath = (path: string): boolean => {
+    if (!path) return false;
     const parts = path.split('/');
-    if (parts.length === 1) {
-      return protectedFolders.includes(parts[0]);
-    }
-    if ((parts[0] === 'Original' || parts[0] === 'Obsolete') && parts.length === 2) {
-      return FIRST_LEVEL_ROOTS.includes(parts[1]);
-    }
+    
+    // Root folders (Original, Obsolete) are protected
+    if (parts.length === 1) return true;
+    
+    // Category folders (Pilotage, Réalisation, Support) are protected
+    if (parts.length === 2) return true;
+    
+    // Process folders (PSP-01, PSP-02, etc.) are protected
+    if (parts.length === 3) return true;
+
+    
     return false;
   };
 
@@ -825,20 +928,19 @@ export default function App() {
         </div>
       </Modal>
 
-      {/* Upload/Archive Modal */}
-      {/* <Modal
+      <Modal
         isOpen={showUploadModal}
         onClose={() => setShowUploadModal(false)}
         title={archiveMode ? "Archiver et remplacer" : "Télécharger des fichiers"}
         // size="lg"
       >
         <UploadArchiveForm
-          isArchive={archiveMode}
-          currentFilePath={archiveFilePath}
+          initialArchiveMode={archiveMode}
+          currentFileName={archiveFilePath ? archiveFilePath.split('/').pop() || '' : ''}
           onSubmit={handleUploadSubmit}
           onCancel={() => setShowUploadModal(false)}
         />
-      </Modal> */}
+      </Modal>
 
       {/* Hidden file input for upload */}
       <input

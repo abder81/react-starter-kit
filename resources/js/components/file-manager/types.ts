@@ -10,8 +10,11 @@ export type Node = {
   parentPath?: string;
   isUserCreated?: boolean;
   isTopLevel?: boolean;
-  folder_path?: string; // For files, path to their parent folder
-  mime_type?: string; // For files
+  folder_path?: string;
+  mime_type?: string;
+  level?: number;
+  folder_type?: 'root' | 'category' | 'process' | 'document_type' | 'confidentiality' | 'custom';
+  is_protected?: boolean;
 };
 
 // API Response types
@@ -20,7 +23,11 @@ export type ApiFolder = {
   id: number;
   name: string;
   full_path: string;
-  nodes: (ApiFolder | ApiFile)[];
+  nodes?: (ApiFolder | ApiFile)[];
+  level: number;
+  folder_type: 'root' | 'category' | 'process' | 'document_type' | 'confidentiality' | 'custom';
+  is_protected: boolean;
+  is_user_created: boolean;
 };
 
 export type ApiFile = {
@@ -31,6 +38,7 @@ export type ApiFile = {
   size: string;
   lastModified: string;
   folder_path?: string;
+  mime_type: string;
 };
 
 export type FolderContentsResponse = {
@@ -43,6 +51,7 @@ export type DocumentSearchResult = {
   full_path: string;
   size: string;
   lastModified: string;
+  mime_type: string;
 };
 
 // Helper function to update nodes in hierarchy
@@ -107,6 +116,14 @@ export const findNode = (
 
 // Convert API response to Node format
 export const convertApiToNode = (apiData: ApiFolder | ApiFile): Node => {
+  // Log the incoming data for debugging
+  console.log('Converting API data:', apiData);
+
+  if (!apiData || typeof apiData !== 'object') {
+    console.error('Invalid API data:', apiData);
+    throw new Error('Invalid API data received');
+  }
+
   if (apiData.type === 'file') {
     return {
       type: 'file',
@@ -116,14 +133,36 @@ export const convertApiToNode = (apiData: ApiFolder | ApiFile): Node => {
       size: apiData.size,
       lastModified: apiData.lastModified,
       folder_path: apiData.folder_path,
+      mime_type: apiData.mime_type,
     };
-  } else {
-    return {
+  } else if (apiData.type === 'folder') {
+    const folderNode: Node = {
       type: 'folder',
       id: apiData.id,
       name: apiData.name,
       full_path: apiData.full_path,
-      nodes: apiData.nodes.map(convertApiToNode),
+      nodes: [],
+      level: apiData.level,
+      folder_type: apiData.folder_type,
+      is_protected: apiData.is_protected,
+      isUserCreated: apiData.is_user_created,
     };
+
+    // Only process nodes if they exist and are an array
+    if (Array.isArray(apiData.nodes)) {
+      folderNode.nodes = apiData.nodes.map(child => {
+        try {
+          return convertApiToNode(child);
+        } catch (error) {
+          console.error('Error converting child node:', child, error);
+          throw error;
+        }
+      });
+    }
+
+    return folderNode;
   }
+
+  console.error('Unknown node type:', apiData);
+  throw new Error('Unknown node type in API data');
 };

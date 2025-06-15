@@ -35,22 +35,40 @@ export function Sidebar({
     try {
       const response = await fetch(`/folders/contents?path=${encodeURIComponent(path)}`);
       if (!response.ok) {
-        throw new Error('Failed to fetch folder contents');
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch folder contents');
       }
       
       const data = await response.json();
-      const children = data.nodes.map((item: any) => ({
-        type: item.type,
-        id: item.id,
-        name: item.name,
-        full_path: item.full_path,
-        nodes: item.type === 'folder' ? [] : undefined,
-        size: item.size,
-        lastModified: item.lastModified,
-        folder_path: item.folder_path,
-        mime_type: item.mime_type,
-        isUserCreated: item.is_user_created,
-      }));
+      
+      // Ensure data.nodes is an array
+      if (!data.nodes || !Array.isArray(data.nodes)) {
+        console.error('Invalid folder contents data:', data);
+        throw new Error('Invalid folder contents data received from server');
+      }
+
+      const children = data.nodes.map((item: any) => {
+        try {
+          return {
+            type: item.type,
+            id: item.id,
+            name: item.name,
+            full_path: item.full_path,
+            nodes: item.type === 'folder' ? [] : undefined,
+            size: item.size,
+            lastModified: item.lastModified,
+            folder_path: item.folder_path,
+            mime_type: item.mime_type,
+            isUserCreated: item.is_user_created,
+            level: item.level,
+            folder_type: item.folder_type,
+            is_protected: item.is_protected,
+          };
+        } catch (error) {
+          console.error('Error converting node:', item, error);
+          throw new Error('Failed to convert folder content node');
+        }
+      });
 
       // Update the hierarchy with the loaded children
       onUpdateHierarchy(prev => 
@@ -108,7 +126,6 @@ export function Sidebar({
           </ul>
         )}
       </div>
-      
     </div>
   );
 }

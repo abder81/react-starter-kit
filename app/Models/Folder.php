@@ -51,24 +51,39 @@ class Folder extends Model
 
     public function isProtected(): bool
     {
-        return $this->is_protected || in_array($this->name, [
-            'Original',
-            'Obsolete',
-            'Pilotage (4)',
-            'Réalisation (6)',
-            'Support (7)'
-        ]);
+        // Root folders are always protected
+        if ($this->level === 1) {
+            return true;
+        }
+
+        // Category folders (Pilotage, Réalisation, Support) are protected
+        if ($this->level === 2) {
+            return true;
+        }
+
+        // Process folders (PSP-01, PSP-02, etc.) are protected
+        if ($this->level === 3) {
+            return true;
+        }
+
+        // Check if parent is protected
+        if ($this->parent && $this->parent->isProtected()) {
+            return true;
+        }
+
+        return $this->is_protected;
     }
 
     public function canUploadFiles(): bool
     {
+        // Only allow uploads in confidentiality level folders (level 5)
         return $this->level === 5;
     }
 
     public static function getHierarchy(?int $parentId = null): array
     {
         $folders = static::where('parent_id', $parentId)
-            ->with('children')
+            ->with(['children', 'documents'])
             ->orderBy('name')
             ->get();
 
@@ -82,6 +97,11 @@ class Folder extends Model
                     'id' => $c->id,
                     'name' => $c->name,
                     'full_path' => $c->full_path,
+                    'level' => $c->level,
+                    'folder_type' => $c->type,
+                    'is_protected' => $c->isProtected(),
+                    'is_user_created' => $c->is_user_created,
+                    'nodes' => []
                 ];
             }
 
@@ -94,6 +114,8 @@ class Folder extends Model
                     'full_path' => $d->full_path,
                     'size' => number_format($d->size/1024/1024, 1) . ' MB',
                     'lastModified' => $d->updated_at->format('Y-m-d'),
+                    'folder_path' => $f->full_path,
+                    'mime_type' => $d->mime_type
                 ];
             }
 
@@ -102,7 +124,11 @@ class Folder extends Model
                 'id' => $f->id,
                 'name' => $f->name,
                 'full_path' => $f->full_path,
-                'nodes' => $nodes,
+                'level' => $f->level,
+                'folder_type' => $f->type,
+                'is_protected' => $f->isProtected(),
+                'is_user_created' => $f->is_user_created,
+                'nodes' => $nodes
             ];
         })->toArray();
     }

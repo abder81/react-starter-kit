@@ -18,6 +18,12 @@ const contains = (
 // Type guard to check if a node is a folder
 const isFolder = (node: Node): boolean => node.type === 'folder';
 
+// Check if a folder has any subfolders
+const hasSubfolders = (node: Node): boolean => {
+  if (!isFolder(node)) return false;
+  return node.nodes?.some(child => isFolder(child)) ?? false;
+};
+
 interface TreeItemProps {
   node: Node;
   path: string;
@@ -42,6 +48,7 @@ export const TreeItem = memo(function TreeItem({
   const folderChildren = isFolder(node) ? node.nodes?.filter(isFolder) ?? [] : [];
   const hasVisibleChildren = folderChildren.length > 0;
   const isSelected = path === selectedPath;
+  const hasSubfoldersInNode = hasSubfolders(node);
 
   // Auto-expand if this node or any descendant is selected
   useEffect(() => {
@@ -106,6 +113,11 @@ export const TreeItem = memo(function TreeItem({
     }
   };
 
+  // Check if this is a folder that should show a chevron. folder (interne, public, restreint, confidentiel and strictement confidentiel) won't show a chevron
+  const shouldShowChevron = isFolder(node) && !['Interne', 'Public', 'Restreint', 'Confidentiel', 'Strictement Confidentiel'].includes(node.name);
+
+  //const shouldShowChevron = isFolder(node) && node.folder_type !== 'confidentiality';
+
   return (
     <li className="select-none">
       <div
@@ -114,7 +126,7 @@ export const TreeItem = memo(function TreeItem({
         }`}
         onClick={handleSelect}
       >
-        {isFolder(node) && (
+        {shouldShowChevron && (
           <button
             onClick={handleToggle}
             className="p-0.5 rounded hover:bg-gray-200 transition-colors"
@@ -134,7 +146,7 @@ export const TreeItem = memo(function TreeItem({
 
         <div
           className={`flex items-center gap-2 flex-1 min-w-0 ${
-            !isFolder(node) ? 'ml-5' : ''
+            !shouldShowChevron ? 'ml-5' : ''
           }`}
         >
           {getNodeIcon()}

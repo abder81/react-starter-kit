@@ -3,12 +3,25 @@
 namespace App\Http\Controllers;
 
 use App\Models\Folder;
+use App\Models\FolderConfiguration;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 
 class FolderController extends Controller
 {
+    /**
+     * Get folder configurations
+     */
+    public function configurations(): JsonResponse
+    {
+        return response()->json([
+            'rootCategories' => FolderConfiguration::getRootCategories(),
+            'documentTypes' => FolderConfiguration::getDocumentTypes(),
+            'confidentialityLevels' => FolderConfiguration::getConfidentialityLevels()
+        ]);
+    }
+
     /**
      * Get folder hierarchy for sidebar
      */

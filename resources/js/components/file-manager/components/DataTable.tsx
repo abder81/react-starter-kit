@@ -32,16 +32,18 @@ const findNode = (nodes: Node[], target: string, cur = ''): Node | null => {
 const getAllFiles = (node: Node): Node[] => {
   const files: Node[] = [];
   const traverse = (cur: Node) => {
-    if (cur.nodes === undefined) { // It's a file
+    if (cur.type === 'file') {
       files.push({
         type: 'file',
         id: cur.id,
         name: cur.name,
         full_path: cur.full_path,
         size: cur.size,
-        lastModified: cur.lastModified
+        lastModified: cur.lastModified,
+        mime_type: cur.mime_type,
+        folder_path: cur.folder_path
       });
-    } else { // It's a folder
+    } else if (cur.nodes) {
       cur.nodes.forEach(child => traverse(child));
     }
   };
@@ -86,10 +88,10 @@ export default function DataTable({
     
     // If node has children (folders), show them with actions enabled
     if (node.nodes && node.nodes.length > 0) {
-      const hasSubfolders = node.nodes.some(child => child.nodes !== undefined);
+      const hasSubfolders = node.nodes.some(child => child.type === 'folder');
       if (hasSubfolders) {
         return { 
-          rows: node.nodes.filter(child => child.nodes !== undefined), 
+          rows: node.nodes.filter(child => child.type === 'folder'), 
           showActions: true 
         };
       }
@@ -111,7 +113,7 @@ export default function DataTable({
       setSelectedFiles([]);
     } else {
       const newSelected = rows
-        .filter(row => !row.isTopLevel) // Don't select top-level items
+        .filter(row => !row.isTopLevel && row.type === 'file') // Don't select top-level items or folders
         .map(row => row.full_path || `${selectedPath}/${row.name}`);
       setSelectedFiles(newSelected);
     }
@@ -150,7 +152,7 @@ export default function DataTable({
 
   // Handle row click for folders
   const handleRowClick = (item: Node) => {
-    if (showActions) {
+    if (showActions && item.type === 'folder') {
       const fullPath = item.isTopLevel 
         ? `${item.parentPath}/${item.name}`
         : item.full_path || `${selectedPath}/${item.name}`;
@@ -341,7 +343,7 @@ export default function DataTable({
                   {/* Actions cell */}
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end gap-2">
-                      {!showActions && (
+                      {!showActions && row.type === 'file' && (
                         <>
                           <button 
                             className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
