@@ -180,3 +180,23 @@ export const convertApiToNode = (apiData: ApiFolder | ApiFile | any): Node => {
   console.error('Unknown node type:', apiData);
   throw new Error('Unknown node type in API data');
 };
+
+// --- START PERMISSION CHANGES ---
+// Mockup of user/auth types for permission checking.
+// In a real app, this would be defined based on your authentication system.
+export type User = {
+    id: number;
+    name: string;
+    email: string;
+    is_admin: boolean; // <-- Added admin flag
+};
+
+export type Auth = {
+    user: User | null;
+};
+
+// This type would typically be in a global types file for Inertia.js
+export type SharedData = {
+    auth: Auth;
+};
+// --- END PERMISSION CHANGES ---

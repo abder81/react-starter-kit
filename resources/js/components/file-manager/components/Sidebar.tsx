@@ -17,6 +17,7 @@ interface SidebarProps {
   hierarchy: Node[];
   loading: boolean;
   onUpdateHierarchy: (updater: (hierarchy: Node[]) => Node[]) => void;
+  isAdmin: boolean;
 }
 
 export function Sidebar({ 
@@ -24,7 +25,8 @@ export function Sidebar({
   onSelect, 
   hierarchy, 
   loading,
-  onUpdateHierarchy 
+  onUpdateHierarchy,
+  isAdmin
 }: SidebarProps) {
   const page = usePage<SharedData>();
   const { auth } = page.props;
@@ -101,8 +103,9 @@ export function Sidebar({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-gray-200 bg-white">
+      <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center">
         <h2 className="text-lg font-semibold text-gray-800">Documents</h2>
+        {isAdmin && <span className="text-xs font-bold text-blue-600 bg-blue-100 px-2 py-1 rounded-full">ADMIN</span>}
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">

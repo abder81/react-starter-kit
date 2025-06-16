@@ -9,13 +9,16 @@ import {
   convertApiToNode,
   DocumentSearchResult,
   FolderContentsResponse,
-  ApiFolder
+  ApiFolder,
+  Auth
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { Breadcrumb } from './components/Breadcrumb';
 import DataTable from './components/DataTable';
 import Modal from './components/Modal';
 import UploadArchiveForm from './components/UploadArchiveForm';
+import { usePage } from '@inertiajs/react';
+import { type SharedData } from '@/types';
 
 // Helper function to get CSRF token
 const getCsrfToken = () => {
@@ -29,6 +32,24 @@ const getDefaultHeaders = () => {
     'X-CSRF-TOKEN': getCsrfToken(),
     'Accept': 'application/json',
   };
+};
+
+/**
+ * Authentication Hook that uses Inertia's auth state.
+ * @returns An object containing the current user's admin status.
+ */
+const useAuth = (): { isAdmin: boolean, auth: Auth } => {
+  const page = usePage<SharedData>();
+  const { auth } = page.props;
+  
+  // If no user is logged in, they are not an admin
+  if (!auth.user) {
+    return { isAdmin: false, auth: { user: null } };
+  }
+
+  // Use the actual is_admin value from the user object
+  const isAdmin = auth.user.is_admin === true;
+  return { isAdmin, auth };
 };
 
 export default function App() {
@@ -71,6 +92,9 @@ export default function App() {
   const [archiveMode, setArchiveMode] = useState(false);
 
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // Get admin status from our auth hook
+  const { isAdmin } = useAuth();
 
   // Optimized API functions with better error handling
   const fetchHierarchy = useCallback(async (): Promise<Node[]> => {
@@ -792,6 +816,7 @@ export default function App() {
           hierarchy={hierarchy}
           loading={loading}
           onUpdateHierarchy={onUpdateHierarchy}
+          isAdmin={isAdmin} 
         />
       </aside>
       
@@ -836,7 +861,7 @@ export default function App() {
               )}
             </div>
             
-            {selectedPath && !isSearching && (
+            {selectedPath && !isSearching && isAdmin && (
               <div className="flex items-center gap-2">
                 {canCreateFolder && (
                     <button
@@ -917,6 +942,7 @@ export default function App() {
               onDownload={handleBulkDownload}
               onPrint={handleBulkPrint}
               onOpenFile={handleOpenFile}
+              isAdmin={isAdmin}
             />
           )}
         </div>

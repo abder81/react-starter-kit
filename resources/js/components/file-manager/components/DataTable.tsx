@@ -28,7 +28,8 @@ interface DataTableProps {
   onArchive: (path: string) => void;
   onDownload?: (paths: string[]) => void;
   onPrint?: (paths: string[]) => void;
-  onOpenFile?: (path: string) => void; // New prop for opening files
+  onOpenFile?: (path: string) => void;
+  isAdmin: boolean;
 }
 
 // Helpers
@@ -111,6 +112,7 @@ export default function DataTable({
   onDownload,
   onPrint,
   onOpenFile,
+  isAdmin,
 }: DataTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
 
@@ -186,7 +188,7 @@ export default function DataTable({
 
   // Bulk actions handlers
   const handleBulkDelete = () => {
-    if (selectedFiles.length > 0) {
+    if (selectedFiles.length > 0 && isAdmin) {
       onDelete(selectedFiles);
       setSelectedFiles([]);
     }
@@ -240,6 +242,11 @@ export default function DataTable({
     }
   };
 
+  const handleActionClick = (e: React.MouseEvent, action: () => void) => {
+    e.stopPropagation();
+    action();
+  };
+
   // Grid view (not implemented in this snippet, but logic would go here)
   if (viewMode === 'grid' && !showActions) {
       // ... grid view JSX ...
@@ -274,13 +281,15 @@ export default function DataTable({
                     <Printer className="h-4 w-4" />
                 </button>
                 )}
-                <button
-                onClick={handleBulkDelete}
-                className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
-                title="Supprimer"
-                >
-                <Trash2 className="h-4 w-4" />
-                </button>
+                {isAdmin && (
+                    <button
+                    onClick={handleBulkDelete}
+                    className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
+                    title="Supprimer"
+                    >
+                    <Trash2 className="h-4 w-4" />
+                    </button>
+                )}
             </div>
         </div>
       )}
@@ -378,65 +387,38 @@ export default function DataTable({
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {row.type === 'file' && (
-                            <div className="flex justify-end items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* Open/View button - prioritized for PDFs */}
+                            <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* Read-only actions for all users */}
                                 {onOpenFile && (
-                                  <button 
-                                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" 
-                                      onClick={(e) => handleOpenFile(row, e)}
-                                      title={isPdfFile(row.name, row.mime_type) ? "Ouvrir le PDF" : "Ouvrir le fichier"}
-                                  >
-                                      {isPdfFile(row.name, row.mime_type) ? (
-                                        <Eye className="h-4 w-4" />
-                                      ) : (
-                                        <ExternalLink className="h-4 w-4" />
-                                      )}
+                                  <button onClick={(e) => handleOpenFile(row, e)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title={isPdfFile(row.name, row.mime_type) ? "Ouvrir" : "Télécharger"}>
+                                        {isPdfFile(row.name, row.mime_type) ? <Eye className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
                                   </button>
                                 )}
-                                
-                                {/* Download button */}
                                 {onDownload && (
-                                  <button 
-                                      className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" 
-                                      onClick={(e) => handleDownloadFile(row, e)}
-                                      title="Télécharger"
-                                  >
-                                      <Download className="h-4 w-4" />
+                                  <button onClick={(e) => handleDownloadFile(row, e)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Télécharger">
+                                        <Download className="h-4 w-4" />
                                   </button>
                                 )}
-
-                                {/* Print button - only for PDFs */}
                                 {onPrint && isPdfFile(row.name, row.mime_type) && (
-                                  <button 
-                                    className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded" 
-                                    onClick={(e) => handlePrintFile(row, e)}
-                                    title="Imprimer"
-                                  >
+                                  <button onClick={(e) => handlePrintFile(row, e)} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded" title="Imprimer">
                                     <Printer className="h-4 w-4" />
                                   </button>
                                 )}
                                 
-                                <button 
-                                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" 
-                                    onClick={(e) => { e.stopPropagation(); onArchive(row.full_path); }}
-                                    title="Archiver"
-                                >
-                                    <Archive className="h-4 w-4" />
-                                </button>
-                                <button 
-                                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" 
-                                    onClick={(e) => { e.stopPropagation(); onRename(row.full_path); }}
-                                    title="Renommer"
-                                >
-                                    <Edit2 className="h-4 w-4" />
-                                </button>
-                                <button 
-                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" 
-                                    onClick={(e) => { e.stopPropagation(); onDelete([row.full_path]); }}
-                                    title="Supprimer"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </button>
+                                {/* Admin-only actions */}
+                                {isAdmin && (
+                                    <>
+                                        <button onClick={(e) => handleActionClick(e, () => onArchive(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Archiver">
+                                            <Archive className="h-4 w-4" />
+                                        </button>
+                                        <button onClick={(e) => handleActionClick(e, () => onRename(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Renommer">
+                                            <Edit2 className="h-4 w-4" />
+                                        </button>
+                                        <button onClick={(e) => handleActionClick(e, () => onDelete([row.full_path]))} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Supprimer">
+                                            <Trash2 className="h-4 w-4" />
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         )}
                     </td>
