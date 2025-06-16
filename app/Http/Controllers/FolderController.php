@@ -7,6 +7,7 @@ use App\Models\FolderConfiguration;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class FolderController extends Controller
 {
@@ -49,7 +50,11 @@ class FolderController extends Controller
                 'type' => 'folder',
                 'id' => $c->id,
                 'name' => $c->name,
-                'full_path' => $c->full_path
+                'full_path' => $c->full_path,
+                'level' => $c->level,
+                'folder_type' => $c->type,
+                'is_protected' => $c->isProtected(),
+                'is_user_created' => $c->is_user_created,
             ];
         }
 
@@ -60,7 +65,9 @@ class FolderController extends Controller
                 'name' => $d->name,
                 'full_path' => $d->full_path,
                 'size' => number_format($d->size/1024/1024, 1) . ' MB',
-                'lastModified' => $d->updated_at->format('Y-m-d')
+                'lastModified' => $d->updated_at->format('Y-m-d'),
+                'folder_path' => $folder->full_path,
+                'mime_type' => $d->mime_type
             ];
         }
 
@@ -72,51 +79,107 @@ class FolderController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:255',
-            'parent_path' => 'required|string'
-        ]);
-
-        $parent = Folder::byPath($data['parent_path'])->firstOrFail();
-        $fullPath = $parent->full_path . '/' . $data['name'];
-        $level = $parent->level + 1;
-        $type = $this->getFolderType($level);
-
-        DB::beginTransaction();
         try {
-            $folder = Folder::create([
-                'name' => $data['name'],
-                'full_path' => $fullPath,
-                'parent_id' => $parent->id,
-                'level' => $level,
-                'type' => $type,
-                'is_user_created' => true
+            $data = $request->validate([
+                'name' => 'required|string|max:255',
+                'parent_path' => 'required|string'
             ]);
 
-            $this->createSubStructure($folder);
-            DB::commit();
-            return response()->json($folder, 201);
+            $parent = Folder::byPath($data['parent_path'])->firstOrFail();
+            
+            // Check if folder with same name already exists
+            if (Folder::where('parent_id', $parent->id)
+                     ->where('name', $data['name'])
+                     ->exists()) {
+                return response()->json([
+                    'error' => 'Un dossier avec ce nom existe déjà'
+                ], 409);
+            }
+
+            $fullPath = $parent->full_path . '/' . $data['name'];
+            
+            DB::beginTransaction();
+            
+            try {
+                $folder = Folder::create([
+                    'name' => $data['name'],
+                    'full_path' => $fullPath,
+                    'parent_id' => $parent->id,
+                    'level' => $parent->level + 1,
+                    'type' => 'custom',
+                    'is_user_created' => true,
+                    'is_protected' => false // Explicitly set as not protected
+                ]);
+
+                DB::commit();
+
+                // Return the folder in the same format as hierarchy
+                return response()->json([
+                    'type' => 'folder',
+                    'id' => $folder->id,
+                    'name' => $folder->name,
+                    'full_path' => $folder->full_path,
+                    'level' => $folder->level,
+                    'folder_type' => $folder->type,
+                    'is_protected' => $folder->isProtected(),
+                    'is_user_created' => $folder->is_user_created,
+                    'nodes' => []
+                ], 201);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                Log::error('Error creating folder in transaction: ' . $e->getMessage());
+                throw $e;
+            }
         } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+            Log::error('Error creating folder: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Erreur lors de la création du dossier: ' . $e->getMessage()
+            ], 500);
         }
     }
 
     /**
      * Delete a folder
      */
-    public function destroy(Request $request): JsonResponse
+    public function destroy(string $path): JsonResponse
     {
-        $request->validate(['path' => 'required|string']);
+        try {
+            $decodedPath = urldecode($path);
+            Log::info('Attempting to delete folder: ' . $decodedPath);
+            
+            $folder = Folder::byPath($decodedPath)->firstOrFail();
+            
+            // Use the model's isProtected method for consistency
+            if ($folder->isProtected()) {
+                Log::warning('Attempt to delete protected folder: ' . $decodedPath . ' (Level: ' . $folder->level . ', User Created: ' . ($folder->is_user_created ? 'Yes' : 'No') . ')');
+                return response()->json([
+                    'error' => 'Ce dossier ne peut pas être supprimé car il est protégé'
+                ], 403);
+            }
 
-        $folder = Folder::byPath($request->path)->firstOrFail();
-        
-        if ($folder->isProtected()) {
-            return response()->json(['error' => 'Forbidden'], 403);
+            DB::beginTransaction();
+            
+            try {
+                // Delete all documents in the folder first
+                $folder->documents()->delete();
+                
+                // Then delete the folder and its children (handled by the model's boot method)
+                $folder->delete();
+                
+                DB::commit();
+                Log::info('Successfully deleted folder: ' . $decodedPath);
+                return response()->json(['message' => 'Dossier supprimé avec succès']);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                Log::error('Error deleting folder in transaction: ' . $e->getMessage());
+                throw $e;
+            }
+        } catch (\Exception $e) {
+            Log::error('Error in destroy method: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Erreur lors de la suppression du dossier: ' . $e->getMessage()
+            ], 500);
         }
-
-        $folder->delete();
-        return response()->json(['message' => 'Deleted']);
     }
 
     /**

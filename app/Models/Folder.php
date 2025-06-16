@@ -24,6 +24,18 @@ class Folder extends Model
         'is_protected' => 'boolean',
     ];
 
+    protected static function boot()
+    {
+        parent::boot();
+        
+        // Before deleting a folder, delete all its children
+        static::deleting(function ($folder) {
+            $folder->children()->get()->each(function ($child) {
+                $child->delete();
+            });
+        });
+    }
+
     public function parent()
     {
         return $this->belongsTo(Folder::class, 'parent_id');
@@ -52,26 +64,26 @@ class Folder extends Model
     public function isProtected(): bool
     {
         // Root folders are always protected
-        if ($this->level === 1) {
-            return true;
-        }
+        // if ($this->level === 1) {
+        //     return true;
+        // }
 
-        // Category folders (Pilotage, Réalisation, Support) are protected
-        if ($this->level === 2) {
-            return true;
-        }
+        // // Category folders (Pilotage, Réalisation, Support) are protected
+        // if ($this->level === 2) {
+        //     return true;
+        // }
 
         // Process folders (PSP-01, PSP-02, etc.) are protected
-        if ($this->level === 3) {
-            return true;
+        // if ($this->level === 3) {
+        //     return true;
+        // }
+
+        // User created folders at level 4 and below can be deleted
+        if ($this->level >= 1 && $this->is_user_created) {
+            return false;
         }
 
-        // Check if parent is protected
-        if ($this->parent && $this->parent->isProtected()) {
-            return true;
-        }
-
-        return $this->is_protected;
+        return $this->is_protected ?? true;
     }
 
     public function canUploadFiles(): bool
@@ -90,10 +102,10 @@ class Folder extends Model
         return $folders->map(function ($f) {
             $nodes = [];
 
-            // child folders
+            // Add child folders - IMPORTANT: Add 'type' field
             foreach ($f->children as $c) {
                 $nodes[] = [
-                    'type' => 'folder',
+                    'type' => 'folder', // This was missing!
                     'id' => $c->id,
                     'name' => $c->name,
                     'full_path' => $c->full_path,
@@ -101,11 +113,11 @@ class Folder extends Model
                     'folder_type' => $c->type,
                     'is_protected' => $c->isProtected(),
                     'is_user_created' => $c->is_user_created,
-                    'nodes' => []
+                    'nodes' => static::getHierarchy($c->id) // Recursively get children
                 ];
             }
 
-            // files under this folder
+            // Add files under this folder
             foreach ($f->documents as $d) {
                 $nodes[] = [
                     'type' => 'file',
@@ -120,7 +132,7 @@ class Folder extends Model
             }
 
             return [
-                'type' => 'folder',
+                'type' => 'folder', // This was missing!
                 'id' => $f->id,
                 'name' => $f->name,
                 'full_path' => $f->full_path,

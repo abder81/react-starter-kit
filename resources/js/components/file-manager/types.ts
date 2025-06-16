@@ -115,7 +115,7 @@ export const findNode = (
 };
 
 // Convert API response to Node format
-export const convertApiToNode = (apiData: ApiFolder | ApiFile): Node => {
+export const convertApiToNode = (apiData: ApiFolder | ApiFile | any): Node => {
   // Log the incoming data for debugging
   console.log('Converting API data:', apiData);
 
@@ -124,6 +124,21 @@ export const convertApiToNode = (apiData: ApiFolder | ApiFile): Node => {
     throw new Error('Invalid API data received');
   }
 
+  // If it's a standard file response from upload
+  if (apiData.name && apiData.size && apiData.lastModified && !apiData.type) {
+    return {
+      type: 'file',
+      id: apiData.id,
+      name: apiData.name,
+      full_path: apiData.full_path || `${apiData.folder_path}/${apiData.name}`,
+      size: apiData.size,
+      lastModified: apiData.lastModified,
+      folder_path: apiData.folder_path,
+      mime_type: apiData.mime_type
+    };
+  }
+
+  // Regular folder/file conversion
   if (apiData.type === 'file') {
     return {
       type: 'file',
@@ -148,9 +163,8 @@ export const convertApiToNode = (apiData: ApiFolder | ApiFile): Node => {
       isUserCreated: apiData.is_user_created,
     };
 
-    // Only process nodes if they exist and are an array
     if (Array.isArray(apiData.nodes)) {
-      folderNode.nodes = apiData.nodes.map(child => {
+      folderNode.nodes = apiData.nodes.map((child: any) => {
         try {
           return convertApiToNode(child);
         } catch (error) {

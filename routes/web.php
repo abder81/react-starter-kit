@@ -11,6 +11,23 @@ Route::get('/', function () {
 })->name('home');
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    // Debug route for storage testing
+    Route::get('/debug/storage', function () {
+        $storagePath = storage_path('app/private');
+        $documentsPath = storage_path('app/private/documents');
+        
+        return response()->json([
+            'storage_path' => $storagePath,
+            'storage_exists' => file_exists($storagePath),
+            'storage_writable' => is_writable($storagePath),
+            'documents_path' => $documentsPath,
+            'documents_exists' => file_exists($documentsPath),
+            'documents_writable' => is_writable($documentsPath),
+            'documents_contents' => file_exists($documentsPath) ? scandir($documentsPath) : [],
+            'storage_disk_config' => config('filesystems.disks.private'),
+        ]);
+    });
+
     // Dashboard
     Route::get('dashboard', function () {
         $hierarchy = Folder::getHierarchy();
@@ -23,8 +40,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/folders/hierarchy', [FolderController::class, 'hierarchy']);
     Route::get('/folders/contents', [FolderController::class, 'contents']);
     Route::get('/folders/configurations', [FolderController::class, 'configurations']);
-    Route::post('/folders', [FolderController::class, 'store']);
-    Route::delete('/folders', [FolderController::class, 'destroy']);
+    Route::post('/folders/create', [FolderController::class, 'store']); // Changed
+    Route::delete('/folders/{path}', [FolderController::class, 'destroy'])
+        ->where('path', '.*'); // This allows slashes in the path parameter
 
     // Document endpoints
     Route::get('/documents', [DocumentController::class, 'index']);
@@ -34,6 +52,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/documents/bulk-delete', [DocumentController::class, 'bulkDelete']);
     Route::post('/documents/download', [DocumentController::class, 'download']);
     Route::get('/documents/search', [DocumentController::class, 'search']);
+
+    // NEW: Add archive route
+    Route::post('/documents/{document}/archive', [DocumentController::class, 'archive']);
+
+    // NEW: Add PDF viewing route
+    Route::get('/documents/view/{path}', [DocumentController::class, 'view'])
+        ->where('path', '.*'); // Allow slashes in path
 });
 
 require __DIR__.'/settings.php';

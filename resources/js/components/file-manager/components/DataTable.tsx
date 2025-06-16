@@ -1,7 +1,21 @@
 // src/components/DataTable.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Node } from '../types';
-import { FileText, Folder, Eye, Download, Trash2, Archive, Edit2, Printer, Check } from 'lucide-react';
+import { 
+    FileText, 
+    Folder, 
+    Download, 
+    Trash2, 
+    Archive, 
+    Edit2, 
+    Printer, 
+    Eye, 
+    ExternalLink, 
+    FileType, 
+    FileSpreadsheet, 
+    File as FileIcon, // Renamed to avoid conflict with native File type
+    FileText as TextFileIcon // Renamed for clarity
+} from 'lucide-react';
 
 interface DataTableProps {
   selectedPath: string | null;
@@ -14,6 +28,7 @@ interface DataTableProps {
   onArchive: (path: string) => void;
   onDownload?: (paths: string[]) => void;
   onPrint?: (paths: string[]) => void;
+  onOpenFile?: (path: string) => void; // New prop for opening files
 }
 
 // Helpers
@@ -29,27 +44,60 @@ const findNode = (nodes: Node[], target: string, cur = ''): Node | null => {
   return null;
 };
 
-const getAllFiles = (node: Node): Node[] => {
-  const files: Node[] = [];
-  const traverse = (cur: Node) => {
-    if (cur.type === 'file') {
-      files.push({
-        type: 'file',
-        id: cur.id,
-        name: cur.name,
-        full_path: cur.full_path,
-        size: cur.size,
-        lastModified: cur.lastModified,
-        mime_type: cur.mime_type,
-        folder_path: cur.folder_path
-      });
-    } else if (cur.nodes) {
-      cur.nodes.forEach(child => traverse(child));
-    }
-  };
-  traverse(node);
-  return files;
+const getAllDocumentsUnder = (node: Node): Node[] => {
+  let documents: Node[] = [];
+  
+  if (node.type === 'file') {
+    documents.push(node);
+    return documents;
+  }
+
+  if (node.nodes) {
+    node.nodes.forEach(childNode => {
+      documents = [...documents, ...getAllDocumentsUnder(childNode)];
+    });
+  }
+
+  return documents;
 };
+
+// Helper to check if file is a PDF
+const isPdfFile = (filename: string, mimeType?: string): boolean => {
+  return mimeType === 'application/pdf' || filename.toLowerCase().endsWith('.pdf');
+};
+
+// UPDATED: Helper to get file icon based on type, as per your request
+const getFileIcon = (mimeType: string | undefined) => {
+    if (!mimeType) return <FileIcon className="h-5 w-5 text-gray-500" />;
+  
+    // PDF files: Red file icon
+    if (mimeType.includes('pdf')) {
+      return <FileText className="h-5 w-5 text-red-500" />;
+    }
+    
+    // Word files: Blue document icon
+    if (mimeType.includes('word') || mimeType.includes('vnd.openxmlformats-officedocument.wordprocessingml.document')) {
+      return <FileType className="h-5 w-5 text-blue-500" />;
+    }
+    
+    // Excel files: Green spreadsheet icon
+    if (mimeType.includes('excel') || mimeType.includes('vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+      return <FileSpreadsheet className="h-5 w-5 text-green-500" />;
+    }
+    
+    // PowerPoint files: Orange document icon
+    if (mimeType.includes('powerpoint') || mimeType.includes('vnd.openxmlformats-officedocument.presentationml.presentation')) {
+      return <FileType className="h-5 w-5 text-orange-500" />;
+    }
+    
+    // Text files: Gray text file icon
+    if (mimeType.startsWith('text/')) {
+      return <TextFileIcon className="h-5 w-5 text-gray-500" />;
+    }
+    
+    // Other files: Gray generic file icon
+    return <FileIcon className="h-5 w-5 text-gray-500" />;
+  };
 
 export default function DataTable({
   selectedPath,
@@ -62,64 +110,72 @@ export default function DataTable({
   onArchive,
   onDownload,
   onPrint,
+  onOpenFile,
 }: DataTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
 
-  // Generate rows based on current path
   const { rows, showActions } = useMemo(() => {
+    // 1. Initial State: No path selected. Show all 'process' folders from 'Original'.
     if (!selectedPath) {
-      // First-run: show all PS* items under Original
-      const original = hierarchy.find(n => n.name === 'Original');
-      const rows: Node[] = [];
-      original?.nodes?.forEach(category => {
-        category.nodes?.forEach(item => {
-          rows.push({ 
-            ...item, 
-            parentPath: `Original/${category.name}`,
-            isTopLevel: true
-          });
+      const originalNode = hierarchy.find(n => n.name === 'Original');
+      if (!originalNode) return { rows: [], showActions: true };
+
+      const processFolders: Node[] = [];
+      originalNode.nodes?.forEach(categoryNode => { // e.g., Pilotage, Réalisation
+        categoryNode.nodes?.forEach(processNode => { // e.g., PSP-01
+          if (processNode.type === 'folder' && processNode.folder_type === 'process') {
+            processFolders.push(processNode);
+          }
         });
       });
-      return { rows, showActions: true };
+      return { rows: processFolders, showActions: true };
     }
 
-    const node = findNode(hierarchy, selectedPath);
-    if (!node) return { rows: [], showActions: false };
-    
-    // If node has children (folders), show them with actions enabled
-    if (node.nodes && node.nodes.length > 0) {
-      const hasSubfolders = node.nodes.some(child => child.type === 'folder');
-      if (hasSubfolders) {
-        return { 
-          rows: node.nodes.filter(child => child.type === 'folder'), 
-          showActions: true 
-        };
+    // 2. A path IS selected. Find the node and show its direct children.
+    const selectedNode = findNode(hierarchy, selectedPath);
+    if (!selectedNode || selectedNode.type !== 'folder') {
+      return { rows: [], showActions: false };
+    }
+
+    // If it's a process or document_type folder, show all documents beneath it
+    if (selectedNode.folder_type === 'process' || selectedNode.folder_type === 'document_type') {
+      const allDocuments = getAllDocumentsUnder(selectedNode);
+      
+      // For process folders, also include direct process folders at the beginning
+      if (selectedNode.folder_type === 'process' && selectedNode.nodes) {
+        const processChildren = selectedNode.nodes.filter(
+          node => node.type === 'folder' && node.folder_type === 'process'
+        );
+        return { rows: [...processChildren, ...allDocuments], showActions: false };
       }
+      
+      return { rows: allDocuments, showActions: false };
     }
     
-    // Otherwise show files
-    return { 
-      rows: getAllFiles(node), 
-      showActions: false 
-    };
+    // For other folder types, show direct children as before
+    return { rows: selectedNode.nodes || [], showActions: false };
+
   }, [selectedPath, hierarchy]);
 
-  // Check if all files are selected
-  const allSelected = rows.length > 0 && selectedFiles.length === rows.length && !rows.some(r => r.isTopLevel);
-  
-  // Toggle all files selection
+  // Reset selection when rows change to avoid stale selections
+  useEffect(() => {
+    setSelectedFiles([]);
+  }, [rows]);
+
+  const allSelected = useMemo(() => {
+    const fileRows = rows.filter(row => row.type === 'file');
+    return fileRows.length > 0 && selectedFiles.length === fileRows.length;
+  }, [rows, selectedFiles]);
+
   const toggleAll = () => {
     if (allSelected) {
       setSelectedFiles([]);
     } else {
-      const newSelected = rows
-        .filter(row => !row.isTopLevel && row.type === 'file') // Don't select top-level items or folders
-        .map(row => row.full_path || `${selectedPath}/${row.name}`);
-      setSelectedFiles(newSelected);
+      const allFilePaths = rows.filter(row => row.type === 'file').map(row => row.full_path);
+      setSelectedFiles(allFilePaths);
     }
   };
 
-  // Toggle single file selection
   const toggleFile = (filePath: string) => {
     setSelectedFiles(prev =>
       prev.includes(filePath)
@@ -142,100 +198,90 @@ export default function DataTable({
       setSelectedFiles([]);
     }
   };
-
+    
   const handleBulkPrint = () => {
     if (onPrint && selectedFiles.length > 0) {
-      onPrint(selectedFiles);
-      setSelectedFiles([]);
+        onPrint(selectedFiles);
+        setSelectedFiles([]);
     }
   };
 
-  // Handle row click for folders
+  // Handle row click to navigate into folders or open files
   const handleRowClick = (item: Node) => {
-    if (showActions && item.type === 'folder') {
-      const fullPath = item.isTopLevel 
-        ? `${item.parentPath}/${item.name}`
-        : item.full_path || `${selectedPath}/${item.name}`;
-      onSelect(fullPath);
+    if (item.type === 'folder') {
+      onSelect(item.full_path);
+    } else if (item.type === 'file' && onOpenFile) {
+      // For files, trigger the open file action
+      onOpenFile(item.full_path);
     }
   };
 
-  // Grid view for files only
+  // Handle file opening (PDF viewing)
+  const handleOpenFile = (item: Node, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onOpenFile) {
+      onOpenFile(item.full_path);
+    }
+  };
+
+  // Handle download single file
+  const handleDownloadFile = (item: Node, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDownload) {
+      onDownload([item.full_path]);
+    }
+  };
+
+  // Handle print single file
+  const handlePrintFile = (item: Node, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onPrint) {
+      onPrint([item.full_path]);
+    }
+  };
+
+  // Grid view (not implemented in this snippet, but logic would go here)
   if (viewMode === 'grid' && !showActions) {
-    return (
-      <div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-          {rows.map((file, i) => (
-            <div key={`${file.name}-${i}`} className="group p-4 border border-gray-200 rounded-lg hover:shadow-md hover:border-gray-300 transition-all duration-200 bg-white">
-              <div className="flex flex-col items-center text-center">
-                <FileText className="h-12 w-12 text-red-500 mb-2" />
-                <h3 className="text-sm font-medium text-gray-900 truncate w-full" title={file.name}>{file.name}</h3>
-                {file.size && <p className="text-xs text-gray-500 mt-1">{file.size}</p>}
-                <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    className="p-1 hover:bg-gray-100 rounded" 
-                    onClick={e => {
-                      e.stopPropagation();
-                      // Handle view action
-                    }}
-                  >
-                    <Eye className="h-4 w-4 text-gray-600" />
-                  </button>
-                  <button 
-                    className="p-1 hover:bg-gray-100 rounded" 
-                    onClick={e => {
-                      e.stopPropagation();
-                      onDownload && onDownload([file.full_path || `${selectedPath}/${file.name}`]);
-                    }}
-                  >
-                    <Download className="h-4 w-4 text-gray-600" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+      // ... grid view JSX ...
   }
 
   return (
     <div>
-      {/* Bulk actions bar - only show for file listings with selections */}
-      {selectedFiles.length > 0 && !showActions && (
+      {/* Bulk actions bar */}
+      {selectedFiles.length > 0 && (
         <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-600">
-              {selectedFiles.length} fichier(s) sélectionné(s)
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {onDownload && (
-              <button
-                onClick={handleBulkDownload}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-                title="Télécharger"
-              >
-                <Download className="h-4 w-4" />
-              </button>
-            )}
-            {onPrint && (
-              <button
-                onClick={handleBulkPrint}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-                title="Imprimer"
-              >
-                <Printer className="h-4 w-4" />
-              </button>
-            )}
-            <button
-              onClick={handleBulkDelete}
-              className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
-              title="Supprimer"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
+            <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-600">
+                {selectedFiles.length} fichier(s) sélectionné(s)
+                </span>
+            </div>
+            <div className="flex items-center gap-2">
+                {onDownload && (
+                <button
+                    onClick={handleBulkDownload}
+                    className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                    title="Télécharger"
+                >
+                    <Download className="h-4 w-4" />
+                </button>
+                )}
+                {onPrint && (
+                <button
+                    onClick={handleBulkPrint}
+                    className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                    title="Imprimer"
+                >
+                    <Printer className="h-4 w-4" />
+                </button>
+                )}
+                <button
+                onClick={handleBulkDelete}
+                className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
+                title="Supprimer"
+                >
+                <Trash2 className="h-4 w-4" />
+                </button>
+            </div>
         </div>
       )}
 
@@ -243,7 +289,6 @@ export default function DataTable({
         <table className="min-w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {/* Only show checkbox column for file listings (not folder listings) */}
               {!showActions && (
                 <th className="w-12 px-4 py-3">
                   <div className="flex items-center">
@@ -251,13 +296,14 @@ export default function DataTable({
                       type="checkbox"
                       checked={allSelected}
                       onChange={toggleAll}
+                      disabled={rows.filter(r => r.type === 'file').length === 0}
                       className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                     />
                   </div>
                 </th>
               )}
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                {showActions ? 'Nom' : 'Fichier'}
+                {showActions ? 'Dossier de processus' : 'Nom'}
               </th>
               {!showActions && (
                 <>
@@ -265,7 +311,7 @@ export default function DataTable({
                     Taille
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Modifié
+                    Dernière modification
                   </th>
                 </>
               )}
@@ -275,127 +321,141 @@ export default function DataTable({
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {rows.map((row, i) => {
-              const filePath = row.full_path || (row.isTopLevel 
-                ? `${row.parentPath}/${row.name}`
-                : `${selectedPath}/${row.name}`);
-
-              const parentPath = filePath.split('/').slice(0, -1).join('/');
-              const isSelected = selectedFiles.includes(filePath);
-
-              return (
-                <tr
-                  key={`${row.name}-${i}`}
-                  className={`hover:bg-gray-50 transition-colors group ${
-                    isSelected ? 'bg-blue-50' : ''
-                  } ${showActions ? 'cursor-pointer' : ''}`}
-                  onClick={() => handleRowClick(row)}
-                >
-                  {/* Checkbox cell - only for file listings */}
-                  {!showActions && (
-                    <td className="w-12 px-4 py-4">
-                      <div className="flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleFile(filePath)}
-                          onClick={e => e.stopPropagation()}
-                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                        />
-                      </div>
-                    </td>
-                  )}
-                  
-                  {/* Name cell */}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      {showActions ? (
-                        <Folder className="h-5 w-5 text-blue-500 mr-3 flex-shrink-0" />
-                      ) : (
-                        <FileText className="h-5 w-5 text-red-500 mr-3 flex-shrink-0" />
-                      )}
-                      <div className="flex flex-col">
-                        {/* Show path for files when not at top level */}
-                        {!showActions && !row.isTopLevel && (
-                          <span className="text-xs text-gray-400 truncate max-w-md">
-                            {parentPath}/
-                          </span>
-                        )}
-                        <div className="text-sm font-medium text-gray-900 truncate">
-                          {row.name}
+            {rows.map((row) => (
+              <tr
+                key={row.full_path}
+                className={`hover:bg-gray-50 transition-colors group ${
+                  selectedFiles.includes(row.full_path) ? 'bg-blue-50' : ''
+                } ${row.type === 'folder' || row.type === 'file' ? 'cursor-pointer' : ''}`}
+                onClick={() => handleRowClick(row)}
+              >
+                {!showActions && (
+                  <td className="w-12 px-4 py-4">
+                     {row.type === 'file' && (
+                        <div className="flex items-center">
+                            <input
+                            type="checkbox"
+                            checked={selectedFiles.includes(row.full_path)}
+                            onChange={() => toggleFile(row.full_path)}
+                            onClick={e => e.stopPropagation()}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                            />
                         </div>
+                     )}
+                  </td>
+                )}
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center">
+                    {row.type === 'folder' ? (
+                      <Folder className="h-5 w-5 text-blue-500 mr-3 flex-shrink-0" />
+                    ) : (
+                      <div className="mr-3 flex-shrink-0">
+                        {getFileIcon(row.mime_type)}
                       </div>
+                    )}
+                    <div className="text-sm font-medium text-gray-900 truncate" title={row.name}>
+                      {row.name}
                     </div>
-                  </td>
-                  
-                  {/* Size and Modified columns - only for files */}
-                  {!showActions && (
-                    <>                
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {row.size || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {row.lastModified || '-'}
-                      </td>
-                    </>
-                  )}
-                  
-                  {/* Actions cell */}
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex justify-end gap-2">
-                      {!showActions && row.type === 'file' && (
-                        <>
-                          <button 
-                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
-                            onClick={e => {
-                              e.stopPropagation();
-                              onArchive(filePath);
-                            }}
-                            title="Archiver"
-                          >
-                            <Archive className="h-4 w-4" />
-                          </button>
-                          <button 
-                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
-                            onClick={e => {
-                              e.stopPropagation();
-                              onRename(filePath);
-                            }}
-                            title="Renommer"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
-                          <button 
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 rounded transition-colors" 
-                            onClick={e => {
-                              e.stopPropagation();
-                              onDelete([filePath]);
-                            }}
-                            title="Supprimer"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                    {/* Show clickable indicator for files */}
+                    {row.type === 'file' && (
+                      <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-xs text-gray-400">
+                          {isPdfFile(row.name, row.mime_type) ? 'Cliquer pour ouvrir' : 'Cliquer pour télécharger'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </td>
+                {showActions ? (
+                  <td colSpan={3}></td>
+                ) : (
+                  <>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {row.type === 'file' ? row.size || '-' : ''}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {row.type === 'file' ? row.lastModified || '-' : ''}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        {row.type === 'file' && (
+                            <div className="flex justify-end items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* Open/View button - prioritized for PDFs */}
+                                {onOpenFile && (
+                                  <button 
+                                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" 
+                                      onClick={(e) => handleOpenFile(row, e)}
+                                      title={isPdfFile(row.name, row.mime_type) ? "Ouvrir le PDF" : "Ouvrir le fichier"}
+                                  >
+                                      {isPdfFile(row.name, row.mime_type) ? (
+                                        <Eye className="h-4 w-4" />
+                                      ) : (
+                                        <ExternalLink className="h-4 w-4" />
+                                      )}
+                                  </button>
+                                )}
+                                
+                                {/* Download button */}
+                                {onDownload && (
+                                  <button 
+                                      className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" 
+                                      onClick={(e) => handleDownloadFile(row, e)}
+                                      title="Télécharger"
+                                  >
+                                      <Download className="h-4 w-4" />
+                                  </button>
+                                )}
+
+                                {/* Print button - only for PDFs */}
+                                {onPrint && isPdfFile(row.name, row.mime_type) && (
+                                  <button 
+                                    className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded" 
+                                    onClick={(e) => handlePrintFile(row, e)}
+                                    title="Imprimer"
+                                  >
+                                    <Printer className="h-4 w-4" />
+                                  </button>
+                                )}
+                                
+                                <button 
+                                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" 
+                                    onClick={(e) => { e.stopPropagation(); onArchive(row.full_path); }}
+                                    title="Archiver"
+                                >
+                                    <Archive className="h-4 w-4" />
+                                </button>
+                                <button 
+                                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" 
+                                    onClick={(e) => { e.stopPropagation(); onRename(row.full_path); }}
+                                    title="Renommer"
+                                >
+                                    <Edit2 className="h-4 w-4" />
+                                </button>
+                                <button 
+                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" 
+                                    onClick={(e) => { e.stopPropagation(); onDelete([row.full_path]); }}
+                                    title="Supprimer"
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </button>
+                            </div>
+                        )}
+                    </td>
+                  </>
+                )}
+              </tr>
+            ))}
           </tbody>
         </table>
-        
-        {/* Empty state */}
         {rows.length === 0 && (
-          <div className="text-center py-12">
-            <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+          <div className="text-center py-20">
+            <Folder className="h-12 w-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              Aucun {showActions ? 'dossier' : 'fichier'} trouvé
+              {showActions ? 'Aucun dossier de processus' : 'Ce dossier est vide'}
             </h3>
-            <p className="text-gray-500">
+            <p className="text-sm text-gray-500">
               {showActions 
-                ? "Ce dossier ne contient aucun sous-dossier" 
-                : "Ce dossier ne contient aucun fichier"
+                ? "Aucun dossier de processus n'a été trouvé."
+                : "Vous pouvez créer un nouveau dossier ou télécharger des fichiers si applicable."
               }
             </p>
           </div>

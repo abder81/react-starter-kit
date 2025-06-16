@@ -15,19 +15,37 @@ export const UploadForm: React.FC<UploadFormProps> = ({ onClose, onSubmit }) => 
 
   const validateFile = (file: File): boolean => {
     const allowedTypes = [
-      'application/pdf', 
-      'application/msword', 
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel', 
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'text/plain'
+      // PDF
+      'application/pdf',
+      // Word
+      'application/msword', // DOC
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // DOCX
+      // Excel
+      'application/vnd.ms-excel', // XLS
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // XLSX
+      // PowerPoint
+      'application/vnd.ms-powerpoint', // PPT
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation', // PPTX
+      // Text
+      'text/plain', // TXT
+      // Additional MIME types for better compatibility
+      'application/x-pdf',
+      'application/x-msword',
+      'application/x-vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/x-vnd.ms-excel',
+      'application/x-vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/x-vnd.ms-powerpoint',
+      'application/x-vnd.openxmlformats-officedocument.presentationml.presentation'
     ];
+
     const maxSize = 100 * 1024 * 1024; // 100MB
 
-    if (!allowedTypes.includes(file.type)) {
-      setError(`Le type de fichier "${file.name}" n'est pas supporté`);
+    // Check file extension as a fallback
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    const allowedExtensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'];
+
+    if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(extension || '')) {
+      setError(`Le type de fichier "${file.name}" n'est pas supporté. Formats acceptés: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT`);
       return false;
     }
 

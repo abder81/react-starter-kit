@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Filter, Grid3X3, List, SortAsc, Search, FileText, FolderPlus, Upload, Trash2 } from 'lucide-react';
 import { 
   findNode, 
@@ -11,20 +11,11 @@ import {
   FolderContentsResponse,
   ApiFolder
 } from './types';
-import  {Sidebar}  from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
 import { Breadcrumb } from './components/Breadcrumb';
 import DataTable from './components/DataTable';
 import Modal from './components/Modal';
 import UploadArchiveForm from './components/UploadArchiveForm';
-
-import { 
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger 
-} from '@/components/ui/dropdown-menu';
-import { MoreVertical } from 'lucide-react';
 
 // Helper function to get CSRF token
 const getCsrfToken = () => {
@@ -44,14 +35,19 @@ export default function App() {
   const MIN_WIDTH = 280;
   const MAX_WIDTH = 600;
 
+  // UI States
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  
+  // Data States
   const [hierarchy, setHierarchy] = useState<Node[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<DocumentSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   // Configuration states
   const [rootCategories, setRootCategories] = useState<string[]>([]);
@@ -61,131 +57,61 @@ export default function App() {
   // Modal states
   const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
+  
+  // Form states
+  const [newFolderName, setNewFolderName] = useState('');
+  const [fileToRename, setFileToRename] = useState<string | null>(null);
+  const [newFileName, setNewFileName] = useState('');
 
-  // Upload / Archive state
+  // Upload states
   const [filesToUpload, setFilesToUpload] = useState<File[]>([]);
   const [archiveFilePath, setArchiveFilePath] = useState<string | null>(null);
   const [archiveMode, setArchiveMode] = useState(false);
 
-  const [fileToRename, setFileToRename] = useState<string | null>(null);
-  const [newFileName, setNewFileName] = useState('');
-
-  // Search results
-  const [searchResults, setSearchResults] = useState<DocumentSearchResult[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load configurations
-  useEffect(() => {
-    const loadConfigurations = async () => {
-      try {
-        const response = await fetch('/folders/configurations');
-        if (!response.ok) {
-          throw new Error('Failed to fetch configurations');
-        }
-        const data = await response.json();
-        setRootCategories(data.rootCategories);
-        setDocTypes(data.documentTypes);
-        setConfidentialityLevels(data.confidentialityLevels);
-      } catch (error) {
-        console.error('Error loading configurations:', error);
-        setError('Failed to load folder configurations');
-      }
-    };
-
-    loadConfigurations();
-  }, []);
-
-  // API functions
-  const fetchHierarchy = async (): Promise<Node[]> => {
+  // Optimized API functions with better error handling
+  const fetchHierarchy = useCallback(async (): Promise<Node[]> => {
     try {
       const response = await fetch('/folders/hierarchy', {
         headers: getDefaultHeaders(),
       });
+      
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch hierarchy');
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch hierarchy`);
       }
       
       const data = await response.json();
-      console.log('Received hierarchy data:', data);
       
-      // Ensure data is an array
       if (!Array.isArray(data)) {
         console.error('Invalid hierarchy data:', data);
         throw new Error('Invalid hierarchy data received from server');
       }
 
-      // Convert each item in the array
-      return data.map(item => {
-        try {
-          if (!item || typeof item !== 'object') {
-            throw new Error('Invalid item in hierarchy data');
-          }
-          return convertApiToNode(item);
-        } catch (error) {
-          console.error('Error converting node:', item, error);
-          throw new Error('Failed to convert hierarchy node');
-        }
-      });
+      return data.map(item => convertApiToNode(item));
     } catch (error) {
       console.error('Error fetching hierarchy:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const fetchFolderContents = async (path: string): Promise<Node[]> => {
+  const createFolder = useCallback(async (name: string, parentPath: string): Promise<Node> => {
     try {
-      const response = await fetch(`/folders/contents?path=${encodeURIComponent(path)}`, {
-        headers: getDefaultHeaders(),
-      });
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch folder contents');
-      }
-      const data: FolderContentsResponse = await response.json();
-      return data.nodes.map(convertApiToNode);
-    } catch (error) {
-      console.error('Error fetching folder contents:', error);
-      throw error;
-    }
-  };
-
-  const searchDocuments = async (query: string): Promise<DocumentSearchResult[]> => {
-    try {
-      const response = await fetch(`/documents/search?query=${encodeURIComponent(query)}`, {
-        headers: getDefaultHeaders(),
-      });
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to search documents');
-      }
-      return await response.json();
-    } catch (error) {
-      console.error('Error searching documents:', error);
-      throw error;
-    }
-  };
-
-  const createFolder = async (name: string, parentPath: string): Promise<Node> => {
-    try {
-      const response = await fetch('/folders', {
+      const response = await fetch('/folders/create', {
         method: 'POST',
         headers: getDefaultHeaders(),
         body: JSON.stringify({
-          name,
+          name: name.trim(),
           parent_path: parentPath,
         }),
       });
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create folder');
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to create folder`);
       }
       
       const folderData = await response.json();
@@ -194,36 +120,50 @@ export default function App() {
       console.error('Error creating folder:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const deleteFolder = async (path: string): Promise<void> => {
+  const deleteFolder = useCallback(async (path: string): Promise<void> => {
     try {
-      const response = await fetch('/folders', {
+      const encodedPath = encodeURIComponent(path);
+      const response = await fetch(`/folders/${encodedPath}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
           'X-CSRF-TOKEN': getCsrfToken(),
           'Accept': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
         },
-        credentials: 'same-origin',
-        body: JSON.stringify({ path }),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
-        if (response.status === 403) {
-          throw new Error('Ce dossier ne peut pas être supprimé car il est protégé');
-        }
-        throw new Error(errorData.error || 'Failed to delete folder');
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to delete folder`);
       }
     } catch (error) {
       console.error('Error deleting folder:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const uploadFiles = async (files: File[], folderPath: string): Promise<Node[]> => {
+  const searchDocuments = useCallback(async (query: string): Promise<DocumentSearchResult[]> => {
+    try {
+      const response = await fetch(`/documents/search?query=${encodeURIComponent(query)}`, {
+        headers: getDefaultHeaders(),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to search documents');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error searching documents:', error);
+      throw error;
+    }
+  }, []);
+
+  // File operations (optimized)
+  const uploadFiles = useCallback(async (files: File[], folderPath: string): Promise<Node[]> => {
     try {
       const formData = new FormData();
       files.forEach(file => formData.append('files[]', file));
@@ -249,14 +189,14 @@ export default function App() {
       console.error('Error uploading files:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const renameDocument = async (documentId: number, newName: string): Promise<void> => {
+  const renameDocument = useCallback(async (documentId: number, newName: string): Promise<void> => {
     try {
       const response = await fetch(`/documents/${documentId}`, {
         method: 'PUT',
         headers: getDefaultHeaders(),
-        body: JSON.stringify({ name: newName }),
+        body: JSON.stringify({ name: newName.trim() }),
       });
 
       if (!response.ok) {
@@ -267,9 +207,9 @@ export default function App() {
       console.error('Error renaming document:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const deleteDocument = async (documentId: number): Promise<void> => {
+  const deleteDocument = useCallback(async (documentId: number): Promise<void> => {
     try {
       const response = await fetch(`/documents/${documentId}`, {
         method: 'DELETE',
@@ -284,9 +224,9 @@ export default function App() {
       console.error('Error deleting document:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const bulkDeleteDocuments = async (documentIds: number[]): Promise<void> => {
+  const bulkDeleteDocuments = useCallback(async (documentIds: number[]): Promise<void> => {
     try {
       const response = await fetch('/documents/bulk-delete', {
         method: 'POST',
@@ -302,10 +242,21 @@ export default function App() {
       console.error('Error bulk deleting documents:', error);
       throw error;
     }
-  };
+  }, []);
 
-  const downloadDocuments = async (documentIds: number[]): Promise<void> => {
+  const downloadDocuments = useCallback(async (paths: string[]): Promise<void> => {
     try {
+      const fileNodes: Node[] = [];
+      paths.forEach(path => {
+        const node = findNode(hierarchy, path);
+        if (node && node.type === 'file') {
+          fileNodes.push(node);
+        }
+      });
+
+      if (fileNodes.length === 0) return;
+
+      const documentIds = fileNodes.map(node => node.id);
       const response = await fetch('/documents/download', {
         method: 'POST',
         headers: getDefaultHeaders(),
@@ -320,16 +271,44 @@ export default function App() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = documentIds.length === 1 ? 'document.pdf' : 'documents.zip';
+      
+      // Use the actual file name for single file downloads
+      if (fileNodes.length === 1) {
+        a.download = fileNodes[0].name;
+      } else {
+        a.download = 'documents.zip';
+      }
+      
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (error) {
       console.error('Error downloading documents:', error);
-      throw error;
+      setError(error instanceof Error ? error.message : 'Failed to download files');
     }
-  };
+  }, [hierarchy]);
+
+  // Load configurations
+  useEffect(() => {
+    const loadConfigurations = async () => {
+      try {
+        const response = await fetch('/folders/configurations');
+        if (!response.ok) {
+          throw new Error('Failed to fetch configurations');
+        }
+        const data = await response.json();
+        setRootCategories(data.rootCategories);
+        setDocTypes(data.documentTypes);
+        setConfidentialityLevels(data.confidentialityLevels);
+      } catch (error) {
+        console.error('Error loading configurations:', error);
+        setError('Failed to load folder configurations');
+      }
+    };
+
+    loadConfigurations();
+  }, []);
 
   // Load initial hierarchy
   useEffect(() => {
@@ -347,9 +326,9 @@ export default function App() {
     };
 
     loadHierarchy();
-  }, []);
+  }, [fetchHierarchy]);
 
-  // Search effect
+  // Optimized search effect with debouncing
   useEffect(() => {
     const performSearch = async () => {
       if (searchTerm.length < 3) {
@@ -371,48 +350,148 @@ export default function App() {
 
     const timeoutId = setTimeout(performSearch, 300);
     return () => clearTimeout(timeoutId);
-  }, [searchTerm]);
+  }, [searchTerm, searchDocuments]);
 
-  // Helper to check if current path allows file uploads (5th level - confidentiality levels)
-  const canUploadFiles = (path: string | null): boolean => {
+  const selectedNode = useMemo(() => {
+    if (!selectedPath || !hierarchy.length) return null;
+    return findNode(hierarchy, selectedPath);
+  }, [selectedPath, hierarchy]);
+
+  const isProtectedPath = useCallback((path: string): boolean => {
     if (!path) return false;
-    const parts = path.split('/');
+    const node = findNode(hierarchy, path);
+    return node?.is_protected || false;
+  }, [hierarchy]);
+  
+  // Event handlers (optimized)
+  const handleCreateFolder = useCallback(async () => {
+    if (!selectedPath || !newFolderName.trim()) {
+      setError('Veuillez saisir un nom de dossier valide');
+      return;
+    }
     
-    // Must be at 5th level: Original/[Process]/[ProcessCode]/[DocType]/[ConfidentialityLevel]
-    if (parts.length !== 5) return false;
-    if (parts[0] !== 'Original') return false;
-    if (!rootCategories.includes(parts[1])) return false;
-    if (!docTypes.includes(parts[3])) return false;
-    if (!confidentialityLevels.includes(parts[4])) return false;
-    return true;
-  };
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const newFolder = await createFolder(newFolderName.trim(), selectedPath);
+      
+      // Update hierarchy with new folder
+      setHierarchy(prev => {
+        const updated = updateNodeInHierarchy(prev, selectedPath, node => ({
+          ...node,
+          nodes: [...(node.nodes || []), newFolder],
+        }));
+        return updated;
+      });
+      
+      // Reset form and close modal
+      setNewFolderName('');
+      setShowCreateFolderModal(false);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create folder';
+      setError(errorMessage);
+      console.error('Create folder error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedPath, newFolderName, createFolder]);
 
-  // Protected folders logic
-  const isProtectedPath = (path: string): boolean => {
-    if (!path) return false;
-    const parts = path.split('/');
+  const handleDeleteFolder = useCallback(async () => {
+    if (!selectedPath || isProtectedPath(selectedPath)) {
+      setError('Ce dossier ne peut pas être supprimé');
+      return;
+    }
     
-    // Root folders (Original, Obsolete) are protected
-    if (parts.length === 1) return true;
-    
-    // Category folders (Pilotage, Réalisation, Support) are protected
-    if (parts.length === 2) return true;
-    
-    // Process folders (PSP-01, PSP-02, etc.) are protected
-    if (parts.length === 3) return true;
+    try {
+      setLoading(true);
+      setError(null);
+      
+      await deleteFolder(selectedPath);
+      
+      // Update hierarchy by removing the deleted folder
+      const parentPath = selectedPath.split('/').slice(0, -1).join('/');
+      setHierarchy(prev => removeNodeInHierarchy(prev, selectedPath));
+      
+      // Navigate to parent
+      setSelectedPath(parentPath || null);
+      setShowDeleteModal(false);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete folder';
+      setError(errorMessage);
+      console.error('Delete folder error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedPath, isProtectedPath, deleteFolder]);
 
-    
-    return false;
-  };
+  // UPDATED: This function is now simpler and more reliable.
+  const handleArchiveUpload = useCallback(async (file: File, version: string) => {
+    if (!archiveFilePath) throw new Error('Archive path not set.');
+    const nodeToArchive = findNode(hierarchy, archiveFilePath);
+    if (!nodeToArchive || nodeToArchive.type !== 'file') throw new Error('File to archive not found.');
 
-  const isDeleteDisabled = !selectedPath || isProtectedPath(selectedPath);
+    setLoading(true);
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('version', version);
+        const response = await fetch(`/documents/${nodeToArchive.id}/archive`, {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': getCsrfToken(), 'Accept': 'application/json' },
+            body: formData,
+        });
 
-  // Search
-  const isSearching = searchTerm.length >= 3;
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Failed to archive file');
+        }
+
+        // --- KEY CHANGE ---
+        // Instead of manually manipulating the state, we re-fetch the entire
+        // hierarchy from the server. This guarantees the UI is in sync with the
+        // database, including the new 'Obsolete' folder if it was just created.
+        const updatedHierarchy = await fetchHierarchy();
+        setHierarchy(updatedHierarchy);
+        // --- END KEY CHANGE ---
+
+        // Close the modal and reset states
+        setShowUploadModal(false);
+        setArchiveMode(false);
+        setArchiveFilePath(null);
+    } catch (error) {
+        setError(error instanceof Error ? error.message : 'Archiving failed.');
+        throw error; // Re-throw for form to handle
+    } finally {
+        setLoading(false);
+    }
+  }, [archiveFilePath, hierarchy, fetchHierarchy]);
+
+
+  const handleFileUpload = useCallback(async (files: File[]) => {
+    if (!selectedPath) {
+      throw new Error('No upload path specified');
+    }
+
+    try {
+      const uploadedFileNodes = await uploadFiles(files, selectedPath);
+      
+      setHierarchy(prev =>
+        updateNodeInHierarchy(prev, selectedPath, node => ({
+          ...node,
+          nodes: [...(node.nodes || []), ...uploadedFileNodes],
+        }))
+      );
+    } catch (error) {
+      console.error('File upload failed:', error);
+      throw error;
+    }
+  }, [selectedPath, uploadFiles]);
 
   // Sidebar resizing
   useEffect(() => {
     if (!isDragging) return;
+    
     const onMove = (e: MouseEvent) => {
       if (!sidebarRef.current) return;
       const rect = sidebarRef.current.getBoundingClientRect();
@@ -420,11 +499,14 @@ export default function App() {
       w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w));
       setSidebarWidth(w);
     };
+    
     const onUp = () => setIsDragging(false);
+    
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'ew-resize';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+    
     return () => {
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
@@ -433,133 +515,58 @@ export default function App() {
     };
   }, [isDragging]);
 
-  // Handle search result click
-  const handleSearchClick = (result: DocumentSearchResult) => {
+  const handleSearchClick = useCallback((result: DocumentSearchResult) => {
     const parts = result.full_path.split('/');
     parts.pop();
     setSelectedPath(parts.join('/'));
     setSearchTerm('');
-  };
+  }, []);
 
-  // Create folder handler
-  const handleCreateFolder = async () => {
-    if (!selectedPath || !newFolderName.trim()) return;
-    
-    try {
-      setLoading(true);
-      const newFolder = await createFolder(newFolderName.trim(), selectedPath);
-      
-      setHierarchy(prev =>
-        updateNodeInHierarchy(prev, selectedPath, node => ({
-          ...node,
-          nodes: [...(node.nodes || []), newFolder],
-        }))
-      );
-      
-      setNewFolderName('');
-      setShowCreateFolderModal(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create folder');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Delete folder handler
-  const handleDeleteFolder = async () => {
-    if (!selectedPath || isProtectedPath(selectedPath)) return;
-    
-    try {
-      setLoading(true);
-      await deleteFolder(selectedPath);
-      
-      const parentPath = selectedPath.split('/').slice(0, -1).join('/');
-      setHierarchy(prev => removeNodeInHierarchy(prev, selectedPath));
-      setSelectedPath(parentPath);
-      setShowDeleteModal(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete folder');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Upload handlers
-  const handleFileUpload = async (files: File[], isArchive: boolean, version?: string) => {
-    if (!files.length) {
-      throw new Error('No files to upload');
-    }
-
-    const targetPath = isArchive && archiveFilePath 
-      ? archiveFilePath.split('/').slice(0, -1).join('/')
-      : selectedPath;
-
-    if (!targetPath) {
-      throw new Error('No upload path specified');
-    }
-
-    try {
-      const uploadedFiles = await uploadFiles(files, targetPath);
-      
-      // Update hierarchy with new files
-      setHierarchy(prev =>
-        updateNodeInHierarchy(prev, targetPath, node => ({
-          ...node,
-          nodes: [...(node.nodes || []), ...uploadedFiles],
-        }))
-      );
-
-      // If archiving, move current file to Obsolete
-      if (isArchive && archiveFilePath) {
-        const obsoletePath = targetPath.replace('Original/', 'Obsolete/');
-        const currentNode = findNode(hierarchy, archiveFilePath);
-        if (currentNode) {
-          setHierarchy(prev => removeNodeInHierarchy(prev, archiveFilePath));
-          setHierarchy(prev =>
-            updateNodeInHierarchy(prev, obsoletePath, node => ({
-              ...node,
-              nodes: [...(node.nodes || []), currentNode],
-            }))
-          );
-        }
-      }
-
-    } catch (error) {
-      console.error('File upload failed:', error);
-      throw error;
-    }
-  };
-
-  const handleUploadClick = () => {
+  const handleUploadClick = useCallback(() => {
+    setFilesToUpload([]);
     setArchiveMode(false);
+    setArchiveFilePath(null);
     setShowUploadModal(true);
-  };
+  }, []);
 
-  const handleArchiveClick = (path: string) => {
-    setArchiveFilePath(path);
-    setArchiveMode(true);
-    setShowUploadModal(true);
-  };
+  const handleArchiveClick = useCallback((path: string) => {
+    const node = findNode(hierarchy, path);
+    if (node?.full_path.startsWith("Original")) {
+        setArchiveFilePath(path);
+        setArchiveMode(true);
+        setShowUploadModal(true);
+    } else {
+        setError("Only files in the 'Original' directory can be archived.");
+    }
+  }, [hierarchy]);
 
-  const handleUploadSubmit = async (files: File[], isArchive: boolean, version: string) => {
+  // UPDATED: This function now routes to the correct handler
+  const handleUploadSubmit = useCallback(async (files: File[], isArchive: boolean, version: string) => {
     try {
-      setFilesToUpload(files);
-      setArchiveMode(isArchive);
+      setLoading(true);
+      setError(null);
+      if (isArchive) {
+        if (files.length !== 1) throw new Error("Archiving requires a single file.");
+        await handleArchiveUpload(files[0], version);
+      } else {
+        await handleFileUpload(files); 
+      }
       
-      await handleFileUpload(files, isArchive, version);
-      
+      // Close modal on success
       setShowUploadModal(false);
       setFilesToUpload([]);
       setArchiveMode(false);
       setArchiveFilePath(null);
     } catch (error) {
-      console.error('Upload/Archive failed:', error);
-      throw error;
+      // Error is set within the upload/archive functions. Don't close modal on error.
+      console.error('Submit failed:', error);
+      setError(error instanceof Error ? error.message : "An unknown error occurred.");
+    } finally {
+        setLoading(false);
     }
-  };
+  }, [handleFileUpload, handleArchiveUpload]);
 
-  // File operations
-  const handleDeleteFile = async (filePath: string) => {
+  const handleDeleteFile = useCallback(async (filePath: string) => {
     const node = findNode(hierarchy, filePath);
     if (!node || node.type !== 'file') return;
 
@@ -569,16 +576,16 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete file');
     }
-  };
+  }, [hierarchy, deleteDocument]);
 
-  const handleRenameFile = (filePath: string) => {
+  const handleRenameFile = useCallback((filePath: string) => {
     setFileToRename(filePath);
     const currentName = filePath.split('/').pop() || '';
     setNewFileName(currentName);
     setShowRenameModal(true);
-  };
+  }, []);
 
-  const handleRenameConfirm = async () => {
+  const handleRenameConfirm = useCallback(async () => {
     if (!fileToRename || !newFileName.trim()) return;
     
     const node = findNode(hierarchy, fileToRename);
@@ -587,14 +594,14 @@ export default function App() {
     try {
       await renameDocument(node.id, newFileName.trim());
       
-      const newNode = { ...node, name: newFileName.trim() };
       const parentPath = fileToRename.split('/').slice(0, -1).join('/');
+      const newFullPath = parentPath + '/' + newFileName.trim();
       
-      setHierarchy(prev => removeNodeInHierarchy(prev, fileToRename));
-      setHierarchy(prev =>
-        updateNodeInHierarchy(prev, parentPath, node => ({
-          ...node,
-          nodes: [...(node.nodes || []), newNode],
+      setHierarchy(prev => 
+        updateNodeInHierarchy(prev, fileToRename, existingNode => ({
+          ...existingNode,
+          name: newFileName.trim(),
+          full_path: newFullPath
         }))
       );
       
@@ -604,10 +611,9 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to rename file');
     }
-  };
+  }, [fileToRename, newFileName, hierarchy, renameDocument]);
 
-  // Bulk actions
-  const handleBulkDelete = async (paths: string[]) => {
+  const handleBulkDelete = useCallback(async (paths: string[]) => {
     const fileNodes: Node[] = [];
     paths.forEach(path => {
       const node = findNode(hierarchy, path);
@@ -630,9 +636,9 @@ export default function App() {
         setError(err instanceof Error ? err.message : 'Failed to delete files');
       }
     }
-  };
+  }, [hierarchy, bulkDeleteDocuments]);
 
-  const handleBulkDownload = async (paths: string[]) => {
+  const handleBulkDownload = useCallback(async (paths: string[]) => {
     const fileNodes: Node[] = [];
     paths.forEach(path => {
       const node = findNode(hierarchy, path);
@@ -644,22 +650,111 @@ export default function App() {
     if (fileNodes.length === 0) return;
 
     try {
-      const documentIds = fileNodes.map(node => node.id);
-      await downloadDocuments(documentIds);
+      await downloadDocuments(paths);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to download files');
     }
-  };
+  }, [hierarchy, downloadDocuments]);
 
-  const handleBulkPrint = (paths: string[]) => {
-    // Implement your print logic here
-    console.log('Printing files:', paths);
-  };
+  const handleBulkPrint = useCallback(async (paths: string[]) => {
+    const fileNodes: Node[] = [];
+    paths.forEach(path => {
+      const node = findNode(hierarchy, path);
+      if (node && node.type === 'file' && (node.mime_type === 'application/pdf' || node.name.toLowerCase().endsWith('.pdf'))) {
+        fileNodes.push(node);
+      }
+    });
 
-  // Add state for managing hierarchy updates
-  const onUpdateHierarchy = (updater: (hierarchy: Node[]) => Node[]) => {
-    setHierarchy(updater(hierarchy));
-  };
+    if (fileNodes.length === 0) {
+      setError('No printable PDF files selected');
+      return;
+    }
+
+    for (const node of fileNodes) {
+      try {
+        const encodedPath = encodeURIComponent(node.full_path);
+        const response = await fetch(`/documents/view/${encodedPath}`, {
+          headers: { 
+            'X-CSRF-TOKEN': getCsrfToken(),
+            'Accept': 'application/pdf'
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load PDF: ${response.status} ${response.statusText}`);
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const printWindow = window.open(url);
+        
+        if (printWindow) {
+          printWindow.onload = () => {
+            printWindow.print();
+            // Don't revoke URL immediately to allow print dialog to complete
+            setTimeout(() => {
+              URL.revokeObjectURL(url);
+            }, 1000);
+          };
+        } else {
+          throw new Error('Failed to open print window');
+        }
+      } catch (err) {
+        setError(`Could not print ${node.name}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    }
+  }, [hierarchy]);
+
+  const onUpdateHierarchy = useCallback((updater: (hierarchy: Node[]) => Node[]) => {
+    setHierarchy(updater);
+  }, []);
+
+  // Update handleOpenFile to use browser's default viewer
+  const handleOpenFile = useCallback(async (path: string) => {
+    const node = findNode(hierarchy, path);
+    if (node && node.type === 'file' && (node.mime_type === 'application/pdf' || node.name.toLowerCase().endsWith('.pdf'))) {
+      try {
+        const encodedPath = encodeURIComponent(node.full_path);
+        const response = await fetch(`/documents/view/${encodedPath}`, {
+          headers: { 
+            'X-CSRF-TOKEN': getCsrfToken(),
+            'Accept': 'application/pdf'
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to load PDF: ${response.status} ${response.statusText}`);
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        // Clean up the URL after a delay to ensure the browser has loaded it
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to open PDF');
+      }
+    } else if (node) {
+      // For non-PDFs, trigger a download directly
+      handleBulkDownload([path]);
+    }
+  }, [hierarchy, handleBulkDownload]);
+
+  // Computed values for button visibility
+  const isDeleteDisabled = !selectedPath || isProtectedPath(selectedPath);
+  const isSearching = searchTerm.length >= 3;
+
+  const canCreateFolder = useMemo(() => {
+    if (!selectedNode || selectedNode.is_protected) return false;
+    const allowedParentTypes: Array<Node['folder_type']> = ['category', 'process', 'document_type', 'confidentiality'];
+    return allowedParentTypes.includes(selectedNode.folder_type);
+  }, [selectedNode]);
+
+  const canUploadFile = useMemo(() => {
+    if (!selectedNode) return false;
+    return selectedNode.folder_type === 'confidentiality';
+  }, [selectedNode]);
+
 
   if (loading && hierarchy.length === 0) {
     return (
@@ -675,14 +770,14 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gray-50">
       {error && (
-        <div className="fixed top-4 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded z-50">
+        <div className="fixed top-4 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded z-50 max-w-md">
           <button
             onClick={() => setError(null)}
-            className="float-right ml-2 text-red-700 hover:text-red-900"
+            className="float-right ml-2 text-red-700 hover:text-red-900 text-lg font-bold"
           >
             ×
           </button>
-          {error}
+          <div className="pr-6">{error}</div>
         </div>
       )}
       
@@ -708,7 +803,18 @@ export default function App() {
       <main className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between">
-            <Breadcrumb selectedPath={selectedPath} onNavigate={setSelectedPath} />
+            <Breadcrumb 
+                selectedPath={selectedPath} 
+                onNavigate={(path) => {
+                    // When using breadcrumb, reset to the top-level process view if navigating above a process folder
+                    const pathParts = path?.split('/') || [];
+                    if (pathParts.length < 3) { // Root ('Original') or Category level
+                        setSelectedPath(null);
+                    } else {
+                        setSelectedPath(path);
+                    }
+                }} 
+            />
           </div>
         </header>
         
@@ -732,27 +838,31 @@ export default function App() {
             
             {selectedPath && !isSearching && (
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowCreateFolderModal(true)}
-                  className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-                >
-                  <FolderPlus className="h-4 w-4" /> Créer dossier
-                </button>
+                {canCreateFolder && (
+                    <button
+                    onClick={() => setShowCreateFolderModal(true)}
+                    disabled={loading}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
+                    >
+                    <FolderPlus className="h-4 w-4" /> Créer dossier
+                    </button>
+                )}
+                
+                {!isDeleteDisabled && (
+                    <button
+                        onClick={() => setShowDeleteModal(true)}
+                        disabled={loading}
+                        className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
+                    >
+                        <Trash2 className="h-4 w-4" /> Supprimer dossier
+                    </button>
+                )}
 
-                <button
-                  onClick={() => setShowDeleteModal(true)}
-                  disabled={isDeleteDisabled}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm ${
-                    isDeleteDisabled ? 'bg-gray-300 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 text-white'
-                  }`}
-                >
-                  <Trash2 className="h-4 w-4" /> Supprimer dossier
-                </button>
-
-                {canUploadFiles(selectedPath) && (
+                {canUploadFile && (
                   <button
                     onClick={handleUploadClick}
-                    className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+                    disabled={loading}
+                    className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
                   >
                     <Upload className="h-4 w-4" /> Télécharger fichier
                   </button>
@@ -795,35 +905,23 @@ export default function App() {
             </div>
           ) : (
             /* Main Content */
-            selectedPath ? (
-              <DataTable
-                selectedPath={selectedPath}
-                onSelect={setSelectedPath}
-                hierarchy={hierarchy}
-                viewMode={viewMode}
-                onCreateFolder={() => setShowCreateFolderModal(true)}
-                onDelete={handleBulkDelete}        // Uncomment this
-                onRename={handleRenameFile}
-                onArchive={handleArchiveClick}
-                onDownload={handleBulkDownload}    // Uncomment this
-                onPrint={handleBulkPrint}          // Uncomment this
-              />
-            ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-                <FileText className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  Sélectionnez un dossier
-                </h3>
-                <p className="text-gray-500">
-                  Choisissez un dossier dans la barre latérale pour voir son contenu
-                </p>
-              </div>
-            )
+            <DataTable
+              selectedPath={selectedPath}
+              onSelect={setSelectedPath}
+              hierarchy={hierarchy}
+              viewMode={viewMode}
+              onCreateFolder={() => setShowCreateFolderModal(true)}
+              onDelete={handleBulkDelete}
+              onRename={handleRenameFile}
+              onArchive={handleArchiveClick}
+              onDownload={handleBulkDownload}
+              onPrint={handleBulkPrint}
+              onOpenFile={handleOpenFile}
+            />
           )}
         </div>
       </main>
 
-      {/* Create Folder Modal */}
       <Modal
         isOpen={showCreateFolderModal}
         onClose={() => setShowCreateFolderModal(false)}
@@ -838,62 +936,96 @@ export default function App() {
               type="text"
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Entrez le nom du dossier"
-              autoFocus
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
             />
           </div>
-          <div className="flex justify-end gap-2 pt-4">
+          <div className="text-sm text-gray-600">
+            <strong>Dossier parent:</strong> {selectedPath || 'Racine'}
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
             <button
               onClick={() => setShowCreateFolderModal(false)}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Annuler
             </button>
             <button
               onClick={handleCreateFolder}
-              disabled={!newFolderName.trim()}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+              disabled={!newFolderName.trim() || loading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
-              Créer
+              {loading ? 'Création...' : 'Créer'}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* Delete Folder Modal */}
+      <Modal
+        isOpen={showUploadModal}
+        onClose={() => {
+          setShowUploadModal(false);
+          setFilesToUpload([]);
+          setArchiveMode(false);
+          setArchiveFilePath(null);
+        }}
+        title={archiveMode ? "Archiver et remplacer" : "Télécharger des fichiers"}
+      >
+        <UploadArchiveForm
+          onSubmit={handleUploadSubmit}
+          onCancel={() => {
+            setShowUploadModal(false);
+            setFilesToUpload([]);
+            setArchiveMode(false);
+            setArchiveFilePath(null);
+          }}
+          initialArchiveMode={archiveMode}
+          currentFileName={archiveFilePath ? archiveFilePath.split('/').pop() : ''}
+        />
+      </Modal>
+
       <Modal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
-        title="Supprimer le dossier"
+        title="Confirmer la suppression"
       >
         <div className="space-y-4">
-          <p className="text-gray-600">
-            Êtes-vous sûr de vouloir supprimer le dossier{' '}
-            <span className="font-medium">{selectedPath?.split('/').pop()}</span> ?
-            Cette action est irréversible.
+          <div className="flex items-center gap-3 text-amber-600">
+            <Trash2 className="h-6 w-6" />
+            <span className="font-medium">Attention</span>
+          </div>
+          <p className="text-gray-700">
+            Êtes-vous sûr de vouloir supprimer le dossier <strong>"{selectedPath?.split('/').pop()}"</strong> ?
           </p>
-          <div className="flex justify-end gap-2 pt-4">
+          <p className="text-sm text-red-600">
+            Cette action est irréversible et supprimera également tous les fichiers et sous-dossiers.
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
             <button
               onClick={() => setShowDeleteModal(false)}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Annuler
             </button>
             <button
               onClick={handleDeleteFolder}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              disabled={loading}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
-              Supprimer
+              {loading ? 'Suppression...' : 'Supprimer'}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* Rename File Modal */}
       <Modal
         isOpen={showRenameModal}
-        onClose={() => setShowRenameModal(false)}
+        onClose={() => {
+          setShowRenameModal(false);
+          setFileToRename(null);
+          setNewFileName('');
+        }}
         title="Renommer le fichier"
       >
         <div className="space-y-4">
@@ -905,54 +1037,35 @@ export default function App() {
               type="text"
               value={newFileName}
               onChange={(e) => setNewFileName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Entrez le nouveau nom"
-              autoFocus
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              onKeyDown={(e) => e.key === 'Enter' && handleRenameConfirm()}
             />
           </div>
-          <div className="flex justify-end gap-2 pt-4">
+          <div className="text-sm text-gray-600">
+            <strong>Fichier actuel:</strong> {fileToRename?.split('/').pop()}
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
             <button
-              onClick={() => setShowRenameModal(false)}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              onClick={() => {
+                setShowRenameModal(false);
+                setFileToRename(null);
+                setNewFileName('');
+              }}
+              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Annuler
             </button>
             <button
               onClick={handleRenameConfirm}
-              disabled={!newFileName.trim()}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+              disabled={!newFileName.trim() || loading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
-              Renommer
+              {loading ? 'Renommage...' : 'Renommer'}
             </button>
           </div>
         </div>
       </Modal>
-
-      <Modal
-        isOpen={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
-        title={archiveMode ? "Archiver et remplacer" : "Télécharger des fichiers"}
-        // size="lg"
-      >
-        <UploadArchiveForm
-          initialArchiveMode={archiveMode}
-          currentFileName={archiveFilePath ? archiveFilePath.split('/').pop() || '' : ''}
-          onSubmit={handleUploadSubmit}
-          onCancel={() => setShowUploadModal(false)}
-        />
-      </Modal>
-
-      {/* Hidden file input for upload */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          const files = Array.from(e.target.files || []);
-          setFilesToUpload(files);
-        }}
-      />
     </div>
   );
 }
