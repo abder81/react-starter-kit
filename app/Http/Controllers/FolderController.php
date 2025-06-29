@@ -89,6 +89,24 @@ class FolderController extends Controller
             if (!$parentFolder) {
                 return response()->json(['error' => 'Parent folder not found.'], 404);
             }
+            
+            // Check if the parent folder allows creating subfolders
+            if ($parentFolder->isProtected() && !in_array($parentFolder->type, ['root', 'category'])) {
+                return response()->json(['error' => 'Cannot create folders under protected folders.'], 403);
+            }
+            
+            // Allow creating folders under user-created folders
+            if ($parentFolder->is_user_created) {
+                // Allow creation
+            }
+            // Allow creating folders under predefined folder types
+            elseif (in_array($parentFolder->type, ['category', 'process', 'document_type', 'confidentiality'])) {
+                // Allow creation
+            }
+            else {
+                return response()->json(['error' => 'Cannot create folders under this type of folder.'], 403);
+            }
+            
             $level = $parentFolder->level + 1;
         }
 
@@ -223,19 +241,22 @@ class FolderController extends Controller
      * Delete a folder.
      * Only admins can delete folders.
      *
-     * @param int $id The ID of the folder to delete.
+     * @param string $path The path of the folder to delete.
      * @return JsonResponse
      */
-    public function destroy(int $id): JsonResponse
+    public function destroy(string $path): JsonResponse
     {
         if (!Auth::check() || !Auth::user()->is_admin) {
             return response()->json(['error' => 'Unauthorized. Only admins can delete folders.'], 403);
         }
 
-        $folder = Folder::findOrFail($id);
+        $folder = Folder::byPath($path)->first();
+        if (!$folder) {
+            return response()->json(['error' => 'Folder not found.'], 404);
+        }
 
-        if ($folder->isProtected()) {
-            return response()->json(['error' => 'Protected folders cannot be deleted.'], 403);
+        if ($folder->isProtected() && in_array($folder->type, ['root', 'category'])) {
+            return response()->json(['error' => 'Protected root and category folders cannot be deleted.'], 403);
         }
 
         try {
@@ -309,5 +330,59 @@ class FolderController extends Controller
                 }
                 break;
         }
+    }
+
+    /**
+     * Get all descendants (folders and documents) under a given folder path.
+     * Used for non-admin DataTable to list all documents under a process.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function descendants(Request $request): JsonResponse
+    {
+        $request->validate(['path' => 'required|string']);
+        $isAdmin = Auth::check() && Auth::user()->is_admin;
+
+        $folder = Folder::byPath($request->path)->first();
+        if (!$folder) {
+            return response()->json(['error' => 'Folder not found.'], 404);
+        }
+
+        // Recursively build the tree
+        $buildTree = function ($folder) use (&$buildTree, $isAdmin) {
+            $children = $folder->children;
+            $documents = $folder->documents;
+            $nodes = [];
+            foreach ($children as $child) {
+                $nodes[] = $buildTree($child);
+            }
+            foreach ($documents as $d) {
+                $nodes[] = [
+                    'type' => 'file',
+                    'id' => $d->id,
+                    'name' => $d->name,
+                    'full_path' => $d->full_path,
+                    'size' => number_format($d->size/1024/1024, 1) . ' MB',
+                    'lastModified' => $d->updated_at->format('Y-m-d'),
+                    'folder_path' => $folder->full_path,
+                    'mime_type' => $d->mime_type
+                ];
+            }
+            return [
+                'type' => 'folder',
+                'id' => $folder->id,
+                'name' => $folder->name,
+                'full_path' => $folder->full_path,
+                'level' => $folder->level,
+                'folder_type' => $folder->type,
+                'is_protected' => $folder->isProtected(),
+                'is_user_created' => $folder->is_user_created,
+                'nodes' => $nodes
+            ];
+        };
+
+        $tree = $buildTree($folder);
+        return response()->json($tree);
     }
 }

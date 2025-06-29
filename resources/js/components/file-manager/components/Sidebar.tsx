@@ -115,11 +115,18 @@ export function Sidebar({
           </div>
         ) : (
           <ul className="space-y-1">
-            {hierarchy.map(node => (
+            {(isAdmin
+              ? hierarchy
+              : (() => {
+                  // For non-admins, only show categories under 'Original' (hide 'Obsolete' and all else)
+                  const original = hierarchy.find(node => node.name === 'Original');
+                  return original && Array.isArray(original.nodes) ? original.nodes : [];
+                })()
+            ).map(node => (
               <TreeItem
                 key={node.id}
                 node={node}
-                path={node.name}
+                path={isAdmin ? node.name : `Original/${node.name}`}
                 selectedPath={selectedPath}
                 onSelect={onSelect}
                 onLoadChildren={handleLoadChildren}

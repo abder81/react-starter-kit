@@ -43,8 +43,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/folders/contents', [FolderController::class, 'contents']);
     Route::get('/folders/configurations', [FolderController::class, 'configurations']);
     Route::post('/folders/create', [FolderController::class, 'store']); // Changed
+    Route::put('/folders/{id}/rename', [FolderController::class, 'rename']); // Add rename route
     Route::delete('/folders/{path}', [FolderController::class, 'destroy'])
         ->where('path', '.*'); // This allows slashes in the path parameter
+    Route::get('/folders/descendants', [FolderController::class, 'descendants']);
 
     // Document endpoints
     Route::get('/documents', [DocumentController::class, 'index']);

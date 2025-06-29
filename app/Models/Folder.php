@@ -245,4 +245,41 @@ class Folder extends Model
     {
         return (bool) $this->is_protected;
     }
+
+    /**
+     * Check if files can be uploaded to this folder.
+     * Files can be uploaded to:
+     * 1. 'document_type' folders (Charte, Guide, Enregistrement, etc.)
+     * 2. 'confidentiality' folders (Interne, Public, etc.) under document types
+     * 3. Any descendants of document type folders
+     *
+     * @return bool
+     */
+    public function canUploadFiles(): bool
+    {
+        // Direct upload to document type folders
+        if ($this->type === 'document_type') {
+            return true;
+        }
+
+        // Direct upload to confidentiality folders
+        if ($this->type === 'confidentiality') {
+            return true;
+        }
+
+        // Check if this folder is under a document type folder
+        // Build the path hierarchy and check if any ancestor is a document type folder
+        $pathParts = explode('/', $this->full_path);
+        $currentPath = '';
+        
+        foreach ($pathParts as $part) {
+            $currentPath = $currentPath ? $currentPath . '/' . $part : $part;
+            $ancestor = Folder::byPath($currentPath)->first();
+            if ($ancestor && $ancestor->type === 'document_type') {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

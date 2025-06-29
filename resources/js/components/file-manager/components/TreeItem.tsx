@@ -18,10 +18,17 @@ const contains = (
 // Type guard to check if a node is a folder
 const isFolder = (node: Node): boolean => node.type === 'folder';
 
-// Check if a folder has any subfolders
+// Check if a folder has any subfolders (recursively)
 const hasSubfolders = (node: Node): boolean => {
   if (!isFolder(node)) return false;
-  return node.nodes?.some(child => isFolder(child)) ?? false;
+  
+  // Check immediate children first
+  const immediateSubfolders = node.nodes?.some(child => isFolder(child)) ?? false;
+  if (immediateSubfolders) return true;
+  
+  // If no immediate subfolders, check if any child folders have subfolders
+  const childFolders = node.nodes?.filter(isFolder) ?? [];
+  return childFolders.some(childFolder => hasSubfolders(childFolder));
 };
 
 interface TreeItemProps {
@@ -108,24 +115,45 @@ export const TreeItem = memo(function TreeItem({
     // For non-admin users, adjust depth calculation since we're skipping level 1
     const adjustedDepth = !isAdmin ? depth + 1 : depth;
     
-    switch (adjustedDepth) {
-        case 1: // Root level (only for admin)
-            return <Folder className="h-4 w-4 text-gray-600" />;
-        case 2: // Categories (Pilotage, Réalisation, Support)
-            return <Folder className="h-4 w-4 text-blue-600" />;
-        case 3: // Processes (PSP-01, etc.)
-            return <Folder className="h-4 w-4 text-green-600" />;
-        case 4: // Document types
-            return <Folder className="h-4 w-4 text-orange-600" />;
-        default: // Confidentiality levels
-            return <Folder className="h-4 w-4 text-purple-600" />;
+    if (isAdmin) {
+      // Admin users: keep original color scheme
+      switch (adjustedDepth) {
+          case 1: // Root level (only for admin)
+              return <Folder className="h-4 w-4 text-gray-600" />;
+          case 2: // Categories (Pilotage, Réalisation, Support)
+              return <Folder className="h-4 w-4 text-blue-600" />;
+          case 3: // Processes (PSP-01, etc.)
+              return <Folder className="h-4 w-4 text-green-600" />;
+          case 4: // Document types
+              return <Folder className="h-4 w-4 text-orange-600" />;
+          default: // Confidentiality levels
+              return <Folder className="h-4 w-4 text-purple-600" />;
+      }
+    } else {
+      // Non-admin users: blue → green → red → purple progression
+      switch (adjustedDepth) {
+          case 3: // Processes (PSP-01, etc.) - Second level
+              return <Folder className="h-4 w-4 text-gray-600" />;
+          case 4: // Document types (Procédures, Instructions, etc.) - Third level
+              return <Folder className="h-4 w-4 text-blue-600" />;
+          case 5: // Document types (Procédures, Instructions, etc.) - Third level
+              return <Folder className="h-4 w-4 text-green-600" />;
+          default: // Confidentiality levels (Interne, Public, etc.) - Fourth level
+              return <Folder className="h-4 w-4 text-purple-600" />;
+      }
     }
   };
 
-  // Check if this is a folder that should show a chevron. folder (interne, public, restreint, confidentiel and strictement confidentiel) won't show a chevron
-  const shouldShowChevron = isFolder(node) && !['Interne', 'Public', 'Restreint', 'Confidentiel', 'Strictement Confidentiel'].includes(node.name);
-
-  //const shouldShowChevron = isFolder(node) && node.folder_type !== 'confidentiality';
+  // Check if this folder should show a chevron
+  const shouldShowChevron = isFolder(node) && (
+    // Show chevron if we know there are subfolders
+    hasSubfoldersInNode ||
+    // Show chevron if children haven't been loaded yet and this folder type typically has subfolders
+    // (but not for confidentiality folders which typically don't have subfolders)
+    ((!node.nodes || node.nodes.length === 0) && 
+     node.folder_type && 
+     ['root', 'category', 'process', 'document_type'].includes(node.folder_type))
+  );
 
   return (
     <li className="select-none">

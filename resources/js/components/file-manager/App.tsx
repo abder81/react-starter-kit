@@ -1,6 +1,6 @@
 // src/App.tsx
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Filter, Grid3X3, List, SortAsc, Search, FileText, FolderPlus, Upload, Trash2 } from 'lucide-react';
+import { Filter, Grid3X3, List, SortAsc, Search, FileText, FolderPlus, Upload, Trash2, Edit2 } from 'lucide-react';
 import { 
   findNode, 
   Node, 
@@ -85,6 +85,9 @@ export default function App() {
   const [newFolderName, setNewFolderName] = useState('');
   const [fileToRename, setFileToRename] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState('');
+  const [folderToRename, setFolderToRename] = useState<string | null>(null);
+  const [newFolderNameForRename, setNewFolderNameForRename] = useState('');
+  const [showRenameFolderModal, setShowRenameFolderModal] = useState(false);
 
   // Upload states
   const [filesToUpload, setFilesToUpload] = useState<File[]>([]);
@@ -164,6 +167,24 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error deleting folder:', error);
+      throw error;
+    }
+  }, []);
+
+  const renameFolder = useCallback(async (folderId: number, newName: string): Promise<void> => {
+    try {
+      const response = await fetch(`/folders/${folderId}/rename`, {
+        method: 'PUT',
+        headers: getDefaultHeaders(),
+        body: JSON.stringify({ new_name: newName.trim() }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to rename folder`);
+      }
+    } catch (error) {
+      console.error('Error renaming folder:', error);
       throw error;
     }
   }, []);
@@ -312,6 +333,13 @@ export default function App() {
       setError(error instanceof Error ? error.message : 'Failed to download files');
     }
   }, [hierarchy]);
+
+  const fetchDescendants = useCallback(async (path: string): Promise<Node> => {
+    const response = await fetch(`/folders/descendants?path=${encodeURIComponent(path)}`);
+    if (!response.ok) throw new Error('Failed to fetch descendants');
+    const data = await response.json();
+    return convertApiToNode(data);
+  }, []);
 
   // Load configurations
   useEffect(() => {
@@ -637,6 +665,48 @@ export default function App() {
     }
   }, [fileToRename, newFileName, hierarchy, renameDocument]);
 
+  const handleRenameFolder = useCallback((folderPath: string) => {
+    setFolderToRename(folderPath);
+    const currentName = folderPath.split('/').pop() || '';
+    setNewFolderNameForRename(currentName);
+    setShowRenameFolderModal(true);
+  }, []);
+
+  const handleRenameFolderConfirm = useCallback(async () => {
+    if (!folderToRename || !newFolderNameForRename.trim()) return;
+    
+    const node = findNode(hierarchy, folderToRename);
+    if (!node || node.type !== 'folder') return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      
+      await renameFolder(node.id, newFolderNameForRename.trim());
+      
+      // Refresh the hierarchy to get the updated structure
+      const updatedHierarchy = await fetchHierarchy();
+      setHierarchy(updatedHierarchy);
+      
+      // Update selected path if it was the renamed folder
+      if (selectedPath === folderToRename) {
+        const parentPath = folderToRename.split('/').slice(0, -1).join('/');
+        const newFullPath = parentPath + '/' + newFolderNameForRename.trim();
+        setSelectedPath(newFullPath);
+      }
+      
+      setShowRenameFolderModal(false);
+      setFolderToRename(null);
+      setNewFolderNameForRename('');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to rename folder';
+      setError(errorMessage);
+      console.error('Rename folder error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [folderToRename, newFolderNameForRename, hierarchy, renameFolder, fetchHierarchy, selectedPath]);
+
   const handleBulkDelete = useCallback(async (paths: string[]) => {
     const fileNodes: Node[] = [];
     paths.forEach(path => {
@@ -765,20 +835,66 @@ export default function App() {
   }, [hierarchy, handleBulkDownload]);
 
   // Computed values for button visibility
-  const isDeleteDisabled = !selectedPath || isProtectedPath(selectedPath);
+  const isDeleteDisabled = !selectedPath || 
+    (isProtectedPath(selectedPath) && ['root', 'category'].includes(selectedNode?.folder_type || ''));
   const isSearching = searchTerm.length >= 3;
 
   const canCreateFolder = useMemo(() => {
-    if (!selectedNode || selectedNode.is_protected) return false;
-    const allowedParentTypes: Array<Node['folder_type']> = ['category', 'process', 'document_type', 'confidentiality'];
+    if (!selectedNode) return false;
+    
+    // Don't allow creating folders under protected folders, except for root and category folders
+    if (selectedNode.is_protected && !['root', 'category'].includes(selectedNode.folder_type || '')) return false;
+    
+    // Allow creating folders under any user-created folder
+    if (selectedNode.isUserCreated) return true;
+    
+    // Allow creating folders under predefined folder types
+    const allowedParentTypes: Array<Node['folder_type']> = ['root', 'category', 'process', 'document_type', 'confidentiality'];
     return allowedParentTypes.includes(selectedNode.folder_type);
   }, [selectedNode]);
 
   const canUploadFile = useMemo(() => {
     if (!selectedNode) return false;
-    return selectedNode.folder_type === 'confidentiality';
-  }, [selectedNode]);
+    
+    // Allow uploading to confidentiality folders directly
+    if (selectedNode.folder_type === 'confidentiality') return true;
+    
+    // Allow uploading to user-created folders
+    if (selectedNode.isUserCreated) return true;
+    
+    // Check if this folder is a descendant of a confidentiality folder
+    const isDescendantOfConfidentiality = (node: Node | null): boolean => {
+      if (!node) return false;
+      if (node.folder_type === 'confidentiality') return true;
+      
+      // Find parent in hierarchy
+      const parentPath = node.full_path.split('/').slice(0, -1).join('/');
+      if (!parentPath) return false;
+      
+      const parentNode = findNode(hierarchy, parentPath);
+      return isDescendantOfConfidentiality(parentNode);
+    };
+    
+    return isDescendantOfConfidentiality(selectedNode);
+  }, [selectedNode, hierarchy]);
 
+  useEffect(() => {
+    if (!isAdmin && selectedPath) {
+      // Find the selected node
+      const selectedNode = findNode(hierarchy, selectedPath);
+      
+      // For non-admin users, fetch full descendants when selecting any folder
+      if (selectedNode && selectedNode.type === 'folder') {
+        fetchDescendants(selectedPath)
+          .then(fullNode => {
+            setHierarchy(prev => updateNodeInHierarchy(prev, selectedPath, () => fullNode));
+          })
+          .catch(error => {
+            console.error('Error fetching descendants:', error);
+          });
+      }
+    }
+  }, [isAdmin, selectedPath, fetchDescendants]);
 
   if (loading && hierarchy.length === 0) {
     return (
@@ -870,6 +986,16 @@ export default function App() {
                     className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                     <FolderPlus className="h-4 w-4" /> Créer dossier
+                    </button>
+                )}
+                
+                {selectedNode?.type === 'folder' && !selectedNode?.is_protected && (
+                    <button
+                        onClick={() => handleRenameFolder(selectedPath)}
+                        disabled={loading}
+                        className="flex items-center gap-2 px-3 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
+                    >
+                        <Edit2 className="h-4 w-4" /> Renommer dossier
                     </button>
                 )}
                 
@@ -1085,6 +1211,54 @@ export default function App() {
             <button
               onClick={handleRenameConfirm}
               disabled={!newFileName.trim() || loading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            >
+              {loading ? 'Renommage...' : 'Renommer'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showRenameFolderModal}
+        onClose={() => {
+          setShowRenameFolderModal(false);
+          setFolderToRename(null);
+          setNewFolderNameForRename('');
+        }}
+        title="Renommer le dossier"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Nouveau nom
+            </label>
+            <input
+              type="text"
+              value={newFolderNameForRename}
+              onChange={(e) => setNewFolderNameForRename(e.target.value)}
+              placeholder="Entrez le nouveau nom"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              onKeyDown={(e) => e.key === 'Enter' && handleRenameFolderConfirm()}
+            />
+          </div>
+          <div className="text-sm text-gray-600">
+            <strong>Dossier actuel:</strong> {folderToRename?.split('/').pop()}
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <button
+              onClick={() => {
+                setShowRenameFolderModal(false);
+                setFolderToRename(null);
+                setNewFolderNameForRename('');
+              }}
+              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Annuler
+            </button>
+            <button
+              onClick={handleRenameFolderConfirm}
+              disabled={!newFolderNameForRename.trim() || loading}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? 'Renommage...' : 'Renommer'}
