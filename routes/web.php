@@ -1,8 +1,10 @@
 <?php
 
+use App\Models\User;
 use Inertia\Inertia;
 use App\Models\Folder;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\UserController;
 use App\Http\Controllers\FolderController;
 use App\Http\Controllers\DocumentController;
 
@@ -59,6 +61,22 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // NEW: Add PDF viewing route
     Route::get('/documents/view/{path}', [DocumentController::class, 'view'])
         ->where('path', '.*'); // Allow slashes in path
+
+    // User Management
+    Route::get('users', function () {
+        return Inertia::render('Users', [
+            'users' => User::all() // Pass all users to the component
+        ]);
+    })->name('users');
+
+    Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
+    Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
+    
+    // Route to manage folder permissions for a specific user
+    Route::get('/users/{user}/permissions', [UserController::class, 'getPermissions'])->name('users.permissions.get');
+    Route::post('/users/{user}/permissions', [UserController::class, 'updatePermissions'])->name('users.permissions.update');
+
 });
 
 require __DIR__.'/settings.php';

@@ -31,6 +31,7 @@ interface TreeItemProps {
   onSelect: (path: string) => void;
   onLoadChildren?: (path: string) => Promise<void>;
   loading?: boolean;
+  isAdmin: boolean;
 }
 
 export const TreeItem = memo(function TreeItem({
@@ -40,6 +41,7 @@ export const TreeItem = memo(function TreeItem({
   onSelect,
   onLoadChildren,
   loading = false,
+  isAdmin,
 }: TreeItemProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoadingChildren, setIsLoadingChildren] = useState(false);
@@ -99,17 +101,24 @@ export const TreeItem = memo(function TreeItem({
     }
   };
 
+  // In TreeItem.tsx, modify the getNodeIcon function:
   const getNodeIcon = () => {
     const depth = path.split('/').length;
-    switch (depth) {
-      case 1:
-        return <Folder className="h-4 w-4 text-blue-600" />;
-      case 2:
-        return <Folder className="h-4 w-4 text-green-600" />;
-      case 3:
-        return <Folder className="h-4 w-4 text-orange-600" />;
-      default:
-        return <Folder className="h-4 w-4 text-purple-600" />;
+    
+    // For non-admin users, adjust depth calculation since we're skipping level 1
+    const adjustedDepth = !isAdmin ? depth + 1 : depth;
+    
+    switch (adjustedDepth) {
+        case 1: // Root level (only for admin)
+            return <Folder className="h-4 w-4 text-gray-600" />;
+        case 2: // Categories (Pilotage, Réalisation, Support)
+            return <Folder className="h-4 w-4 text-blue-600" />;
+        case 3: // Processes (PSP-01, etc.)
+            return <Folder className="h-4 w-4 text-green-600" />;
+        case 4: // Document types
+            return <Folder className="h-4 w-4 text-orange-600" />;
+        default: // Confidentiality levels
+            return <Folder className="h-4 w-4 text-purple-600" />;
     }
   };
 
@@ -173,6 +182,7 @@ export const TreeItem = memo(function TreeItem({
                 onSelect={onSelect}
                 onLoadChildren={onLoadChildren}
                 loading={loading}
+                isAdmin={isAdmin}
               />
             ))}
           </ul>

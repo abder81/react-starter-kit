@@ -124,6 +124,7 @@ export function Sidebar({
                 onSelect={onSelect}
                 onLoadChildren={handleLoadChildren}
                 loading={loading}
+                isAdmin={isAdmin}
               />
             ))}
           </ul>

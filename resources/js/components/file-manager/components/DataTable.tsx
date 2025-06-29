@@ -1,4 +1,3 @@
-// src/components/DataTable.tsx
 import React, { useState, useMemo, useEffect } from 'react';
 import { Node } from '../types';
 import { 
@@ -13,8 +12,8 @@ import {
     ExternalLink, 
     FileType, 
     FileSpreadsheet, 
-    File as FileIcon, // Renamed to avoid conflict with native File type
-    FileText as TextFileIcon // Renamed for clarity
+    File as FileIcon,
+    FileText as TextFileIcon
 } from 'lucide-react';
 
 interface DataTableProps {
@@ -100,31 +99,34 @@ const getFileIcon = (mimeType: string | undefined) => {
     return <FileIcon className="h-5 w-5 text-gray-500" />;
   };
 
-export default function DataTable({
-  selectedPath,
-  onSelect,
-  hierarchy,
-  viewMode,
-  onCreateFolder,
-  onDelete,
-  onRename,
-  onArchive,
-  onDownload,
-  onPrint,
-  onOpenFile,
-  isAdmin,
-}: DataTableProps) {
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-
-  const { rows, showActions } = useMemo(() => {
+  export default function DataTable({
+    selectedPath,
+    onSelect,
+    hierarchy,
+    viewMode,
+    onCreateFolder,
+    onDelete,
+    onRename,
+    onArchive,
+    onDownload,
+    onPrint,
+    onOpenFile,
+    isAdmin,
+  }: DataTableProps) {
+    const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  
+// Update the useMemo section in DataTable.tsx
+const { rows, showActions } = useMemo(() => {
+  // For admin users - show full hierarchy as before
+  if (isAdmin) {
     // 1. Initial State: No path selected. Show all 'process' folders from 'Original'.
     if (!selectedPath) {
       const originalNode = hierarchy.find(n => n.name === 'Original');
       if (!originalNode) return { rows: [], showActions: true };
 
       const processFolders: Node[] = [];
-      originalNode.nodes?.forEach(categoryNode => { // e.g., Pilotage, Réalisation
-        categoryNode.nodes?.forEach(processNode => { // e.g., PSP-01
+      originalNode.nodes?.forEach(categoryNode => {
+        categoryNode.nodes?.forEach(processNode => {
           if (processNode.type === 'folder' && processNode.folder_type === 'process') {
             processFolders.push(processNode);
           }
@@ -143,7 +145,6 @@ export default function DataTable({
     if (selectedNode.folder_type === 'process' || selectedNode.folder_type === 'document_type') {
       const allDocuments = getAllDocumentsUnder(selectedNode);
       
-      // For process folders, also include direct process folders at the beginning
       if (selectedNode.folder_type === 'process' && selectedNode.nodes) {
         const processChildren = selectedNode.nodes.filter(
           node => node.type === 'folder' && node.folder_type === 'process'
@@ -154,10 +155,38 @@ export default function DataTable({
       return { rows: allDocuments, showActions: false };
     }
     
-    // For other folder types, show direct children as before
     return { rows: selectedNode.nodes || [], showActions: false };
+  }
+  // For non-admin users - simplified view
+  else {
+    // 1. Initial State: No path selected. Show all process folders directly
+    if (!selectedPath) {
+      const processFolders: Node[] = [];
+      
+      // Find all process folders under Original
+      const originalNode = hierarchy.find(n => n.name === 'Original');
+      originalNode?.nodes?.forEach(categoryNode => {
+        categoryNode.nodes?.forEach(processNode => {
+          if (processNode.type === 'folder' && processNode.folder_type === 'process') {
+            processFolders.push(processNode);
+          }
+        });
+      });
+      
+      return { rows: processFolders, showActions: true };
+    }
 
-  }, [selectedPath, hierarchy]);
+    // 2. When a process folder is selected, show all documents under it
+    const selectedNode = findNode(hierarchy, selectedPath);
+    if (!selectedNode || selectedNode.type !== 'folder') {
+      return { rows: [], showActions: false };
+    }
+
+    // Show all documents under the selected process folder
+    const allDocuments = getAllDocumentsUnder(selectedNode);
+    return { rows: allDocuments, showActions: false };
+  }
+}, [selectedPath, hierarchy, isAdmin]);
 
   // Reset selection when rows change to avoid stale selections
   useEffect(() => {

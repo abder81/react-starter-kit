@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth; // Import Auth facade
 
 class FolderController extends Controller
 {
@@ -28,185 +29,240 @@ class FolderController extends Controller
      */
     public function hierarchy(): JsonResponse
     {
-        $hierarchy = Folder::getHierarchy();
+        $isAdmin = Auth::check() && Auth::user()->is_admin;
+        $hierarchy = Folder::getHierarchy(null, $isAdmin);
         return response()->json($hierarchy);
     }
 
     /**
      * Get contents of one folder
+     *
+     * @param Request $request
+     * @return JsonResponse
      */
     public function contents(Request $request): JsonResponse
     {
         $request->validate(['path' => 'required|string']);
+        $isAdmin = Auth::check() && Auth::user()->is_admin;
 
-        $folder = Folder::byPath($request->path)
-            ->with(['children', 'documents'])
-            ->firstOrFail();
+        // Use the new getFilteredContents method
+        $nodes = Folder::getFilteredContents($request->path, $isAdmin);
 
-        $nodes = [];
-
-        foreach ($folder->children as $c) {
-            $nodes[] = [
-                'type' => 'folder',
-                'id' => $c->id,
-                'name' => $c->name,
-                'full_path' => $c->full_path,
-                'level' => $c->level,
-                'folder_type' => $c->type,
-                'is_protected' => $c->isProtected(),
-                'is_user_created' => $c->is_user_created,
-            ];
+        // If the nodes array is empty and the user is not an admin, it implies
+        // they tried to access a restricted folder. You can return a 403.
+        if (empty($nodes) && !$isAdmin) {
+             $folder = Folder::byPath($request->path)->first();
+             if ($folder && !in_array($folder->type, ['root', 'category', 'process', 'document_type', 'confidentiality'])) {
+                 return response()->json(['error' => 'Accès refusé à ce dossier.'], 403);
+             }
+             // If folder is not found or it's allowed type but no children, still return 200 with empty nodes
         }
 
-        foreach ($folder->documents as $d) {
-            $nodes[] = [
-                'type' => 'file',
-                'id' => $d->id,
-                'name' => $d->name,
-                'full_path' => $d->full_path,
-                'size' => number_format($d->size/1024/1024, 1) . ' MB',
-                'lastModified' => $d->updated_at->format('Y-m-d'),
-                'folder_path' => $folder->full_path,
-                'mime_type' => $d->mime_type
-            ];
-        }
 
         return response()->json(['nodes' => $nodes]);
     }
 
     /**
-     * Create a new folder
+     * Create a new folder.
+     * Only admins can create folders.
+     *
+     * @param Request $request
+     * @return JsonResponse
      */
     public function store(Request $request): JsonResponse
     {
+        if (!Auth::check() || !Auth::user()->is_admin) {
+            return response()->json(['error' => 'Unauthorized. Only admins can create folders.'], 403);
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'parent_path' => 'nullable|string',
+            'is_protected' => 'boolean',
+        ]);
+
+        $parentFolder = null;
+        $level = 1; // Default level for root folders
+
+        if ($request->filled('parent_path')) {
+            $parentFolder = Folder::byPath($request->parent_path)->first();
+            if (!$parentFolder) {
+                return response()->json(['error' => 'Parent folder not found.'], 404);
+            }
+            $level = $parentFolder->level + 1;
+        }
+
+        $fullPath = $request->filled('parent_path')
+            ? $request->parent_path . '/' . $request->name
+            : $request->name;
+
+        // Check for duplicate folder name at the same level
+        $existingFolder = Folder::where('full_path', $fullPath)->first();
+        if ($existingFolder) {
+            return response()->json(['error' => 'Un dossier avec ce nom existe déjà à cet emplacement.'], 409);
+        }
+
         try {
-            $data = $request->validate([
-                'name' => 'required|string|max:255',
-                'parent_path' => 'required|string'
+            DB::beginTransaction();
+
+            $folder = Folder::create([
+                'name' => $request->name,
+                'full_path' => $fullPath,
+                'parent_id' => $parentFolder ? $parentFolder->id : null,
+                'level' => $level,
+                'type' => 'custom', // Custom type for user-created folders
+                'is_user_created' => true,
+                'is_protected' => $request->boolean('is_protected', false),
             ]);
 
-            $parent = Folder::byPath($data['parent_path'])->firstOrFail();
-            
-            // Check if folder with same name already exists
-            if (Folder::where('parent_id', $parent->id)
-                     ->where('name', $data['name'])
-                     ->exists()) {
-                return response()->json([
-                    'error' => 'Un dossier avec ce nom existe déjà'
-                ], 409);
-            }
+            // If it's a custom folder, we don't auto-generate subfolders like for predefined types.
 
-            $fullPath = $parent->full_path . '/' . $data['name'];
-            
-            DB::beginTransaction();
-            
-            try {
-                $folder = Folder::create([
-                    'name' => $data['name'],
-                    'full_path' => $fullPath,
-                    'parent_id' => $parent->id,
-                    'level' => $parent->level + 1,
-                    'type' => 'custom',
-                    'is_user_created' => true,
-                    'is_protected' => false // Explicitly set as not protected
-                ]);
+            DB::commit();
 
-                DB::commit();
+            // Return the newly created folder data in the same format as hierarchy
+            $newNode = [
+                'type' => 'folder',
+                'id' => $folder->id,
+                'name' => $folder->name,
+                'full_path' => $folder->full_path,
+                'level' => $folder->level,
+                'folder_type' => $folder->type,
+                'is_protected' => $folder->isProtected(),
+                'is_user_created' => $folder->is_user_created,
+                'nodes' => [] // Newly created folders have no children initially
+            ];
 
-                // Return the folder in the same format as hierarchy
-                return response()->json([
-                    'type' => 'folder',
-                    'id' => $folder->id,
-                    'name' => $folder->name,
-                    'full_path' => $folder->full_path,
-                    'level' => $folder->level,
-                    'folder_type' => $folder->type,
-                    'is_protected' => $folder->isProtected(),
-                    'is_user_created' => $folder->is_user_created,
-                    'nodes' => []
-                ], 201);
-            } catch (\Exception $e) {
-                DB::rollBack();
-                Log::error('Error creating folder in transaction: ' . $e->getMessage());
-                throw $e;
-            }
+            return response()->json($newNode, 201);
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Error creating folder: ' . $e->getMessage());
-            return response()->json([
-                'error' => 'Erreur lors de la création du dossier: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['error' => 'Failed to create folder.', 'details' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * Delete a folder
+     * Rename a folder.
+     * Only admins can rename folders.
+     *
+     * @param Request $request
+     * @param int $id The ID of the folder to rename.
+     * @return JsonResponse
      */
-    public function destroy(string $path): JsonResponse
+    public function rename(Request $request, int $id): JsonResponse
     {
+        if (!Auth::check() || !Auth::user()->is_admin) {
+            return response()->json(['error' => 'Unauthorized. Only admins can rename folders.'], 403);
+        }
+
+        $request->validate([
+            'new_name' => 'required|string|max:255',
+        ]);
+
+        $folder = Folder::findOrFail($id);
+
+        if ($folder->isProtected()) {
+            return response()->json(['error' => 'Protected folders cannot be renamed.'], 403);
+        }
+
+        $oldFullPath = $folder->full_path;
+        $newFullPath = dirname($oldFullPath) . '/' . $request->new_name;
+        if (dirname($oldFullPath) === '.') { // Handle root level folders
+            $newFullPath = $request->new_name;
+        }
+
+        // Check for duplicate name at the same level
+        $existingFolder = Folder::where('full_path', $newFullPath)->first();
+        if ($existingFolder && $existingFolder->id !== $folder->id) {
+            return response()->json(['error' => 'Un dossier ou fichier avec ce nom existe déjà à cet emplacement.'], 409);
+        }
+
         try {
-            $decodedPath = urldecode($path);
-            Log::info('Attempting to delete folder: ' . $decodedPath);
-            
-            $folder = Folder::byPath($decodedPath)->firstOrFail();
-            
-            // Use the model's isProtected method for consistency
-            if ($folder->isProtected()) {
-                Log::warning('Attempt to delete protected folder: ' . $decodedPath . ' (Level: ' . $folder->level . ', User Created: ' . ($folder->is_user_created ? 'Yes' : 'No') . ')');
-                return response()->json([
-                    'error' => 'Ce dossier ne peut pas être supprimé car il est protégé'
-                ], 403);
-            }
-
             DB::beginTransaction();
-            
-            try {
-                // Delete all documents in the folder first
-                $folder->documents()->delete();
-                
-                // Then delete the folder and its children (handled by the model's boot method)
-                $folder->delete();
-                
-                DB::commit();
-                Log::info('Successfully deleted folder: ' . $decodedPath);
-                return response()->json(['message' => 'Dossier supprimé avec succès']);
-            } catch (\Exception $e) {
-                DB::rollBack();
-                Log::error('Error deleting folder in transaction: ' . $e->getMessage());
-                throw $e;
-            }
+
+            $folder->name = $request->new_name;
+            $folder->full_path = $newFullPath;
+            $folder->save();
+
+            // Update full_path for all children folders and documents recursively
+            $this->updateChildPaths($folder);
+
+            DB::commit();
+
+            return response()->json(['message' => 'Dossier renommé avec succès.', 'new_path' => $newFullPath]);
         } catch (\Exception $e) {
-            Log::error('Error in destroy method: ' . $e->getMessage());
-            return response()->json([
-                'error' => 'Erreur lors de la suppression du dossier: ' . $e->getMessage()
-            ], 500);
+            DB::rollBack();
+            Log::error('Error renaming folder: ' . $e->getMessage());
+            return response()->json(['error' => 'Failed to rename folder.', 'details' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * Get folder type based on level
+     * Helper function to recursively update child paths after parent rename.
+     *
+     * @param Folder $folder
+     * @return void
      */
-    private function getFolderType(int $level): string
+    private function updateChildPaths(Folder $folder): void
     {
-        return match ($level) {
-            1 => 'root',
-            2 => 'category',
-            3 => 'process',
-            4 => 'document_type',
-            5 => 'confidentiality',
-            default => 'custom',
-        };
+        // Update children folders
+        foreach ($folder->children as $childFolder) {
+            $childFolder->full_path = $folder->full_path . '/' . $childFolder->name;
+            $childFolder->save();
+            $this->updateChildPaths($childFolder); // Recurse
+        }
+
+        // Update documents within this folder
+        foreach ($folder->documents as $document) {
+            $document->full_path = $folder->full_path . '/' . $document->name;
+            $document->folder_path = $folder->full_path;
+            $document->save();
+        }
     }
 
     /**
-     * Create sub-structure for new folders
+     * Delete a folder.
+     * Only admins can delete folders.
+     *
+     * @param int $id The ID of the folder to delete.
+     * @return JsonResponse
      */
-    private function createSubStructure(Folder $folder): void
+    public function destroy(int $id): JsonResponse
+    {
+        if (!Auth::check() || !Auth::user()->is_admin) {
+            return response()->json(['error' => 'Unauthorized. Only admins can delete folders.'], 403);
+        }
+
+        $folder = Folder::findOrFail($id);
+
+        if ($folder->isProtected()) {
+            return response()->json(['error' => 'Protected folders cannot be deleted.'], 403);
+        }
+
+        try {
+            DB::beginTransaction();
+            $folder->delete(); // The boot method in Folder model handles recursive deletion of children and documents
+            DB::commit();
+            return response()->json(['message' => 'Dossier supprimé avec succès.']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error deleting folder: ' . $e->getMessage());
+            return response()->json(['error' => 'Failed to delete folder.', 'details' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Generate pre-defined subfolders when a category is created.
+     * Used internally.
+     *
+     * @param Folder $folder
+     * @return void
+     */
+    private function generateCategorySubfolders(Folder $folder): void
     {
         $docTypes = [
-            'Procédure',
-            'Charte',
-            'Guide',
-            'Politique',
+            'Procédures',
+            'Instructions de travail',
+            'Formulaires',
             'Enregistrement'
         ];
 
@@ -226,7 +282,7 @@ class FolderController extends Controller
                         'full_path' => $folder->full_path . '/' . $dt,
                         'parent_id' => $folder->id,
                         'level' => 3,
-                        'type' => 'process'
+                        'type' => 'process' // This seems like it should be 'document_type' or similar based on name
                     ]);
 
                     foreach ($conf as $c) {
@@ -235,7 +291,7 @@ class FolderController extends Controller
                             'full_path' => $f2->full_path . '/' . $c,
                             'parent_id' => $f2->id,
                             'level' => 4,
-                            'type' => 'document_type'
+                            'type' => 'document_type' // This seems like it should be 'confidentiality' or similar
                         ]);
                     }
                 }

@@ -2,8 +2,11 @@
 
 namespace App\Models;
 
+use App\Models\User;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Folder extends Model
 {
@@ -27,7 +30,7 @@ class Folder extends Model
     protected static function boot()
     {
         parent::boot();
-        
+
         // Before deleting a folder, delete all its children
         static::deleting(function ($folder) {
             $folder->children()->get()->each(function ($child) {
@@ -61,51 +64,117 @@ class Folder extends Model
         return $query->where('full_path', $path);
     }
 
-    public function isProtected(): bool
+    /**
+     * Get the folder hierarchy.
+     * For non-admin users, it filters to show only 'process' folders under 'Original' branches.
+     *
+     * @param int|null $parentId
+     * @param bool $isAdmin
+     * @return array
+     */
+    public static function getHierarchy(?int $parentId = null, bool $isAdmin = true): array
     {
-        // Root folders are always protected
-        // if ($this->level === 1) {
-        //     return true;
-        // }
-
-        // // Category folders (Pilotage, Réalisation, Support) are protected
-        // if ($this->level === 2) {
-        //     return true;
-        // }
-
-        // Process folders (PSP-01, PSP-02, etc.) are protected
-        // if ($this->level === 3) {
-        //     return true;
-        // }
-
-        // User created folders at level 4 and below can be deleted
-        if ($this->level >= 1 && $this->is_user_created) {
-            return false;
-        }
-
-        return $this->is_protected ?? true;
-    }
-
-    public function canUploadFiles(): bool
-    {
-        // Only allow uploads in confidentiality level folders (level 5)
-        return $this->level === 5;
-    }
-
-    public static function getHierarchy(?int $parentId = null): array
-    {
-        $folders = static::where('parent_id', $parentId)
-            ->with(['children', 'documents'])
+        // Start with folders at the current level, ordered by name
+        $folders = Folder::where('parent_id', $parentId)
+            ->when(!$isAdmin, function ($query) use ($parentId) {
+                // If not admin and at root level, only show 'Original'
+                if (is_null($parentId)) {
+                    $query->where('name', 'Original');
+                } else {
+                    // For non-admin, if parent is 'Original' or 'category', show its children
+                    // If parent is a 'process' folder, show its children (doc types, conf)
+                    // Otherwise, only show 'process' type children
+                    $parentFolder = Folder::find($parentId);
+                    if ($parentFolder && ($parentFolder->type === 'root' || $parentFolder->type === 'category' || $parentFolder->type === 'process')) {
+                        // Allow all children under root/category/process for expansion
+                        // This allows 'document_type' and 'confidentiality' folders to appear
+                        // under a 'process' folder when it's expanded.
+                        return $query;
+                    } else {
+                        // For other types, only show 'process' children. This might need refinement
+                        // based on exact hierarchy structure and what the user wants to see.
+                        $query->where('type', 'process');
+                    }
+                }
+            })
             ->orderBy('name')
             ->get();
 
-        return $folders->map(function ($f) {
+        $hierarchy = [];
+
+        foreach ($folders as $folder) {
             $nodes = [];
 
-            // Add child folders - IMPORTANT: Add 'type' field
-            foreach ($f->children as $c) {
+            // Recursively get children for folders, applying admin/non-admin logic
+            // For non-admin, we want to expand specific branches only.
+            $children = static::getHierarchy($folder->id, $isAdmin);
+
+            // Add children folders
+            foreach ($children as $childNode) {
+                $nodes[] = $childNode;
+            }
+
+            // Add files under this folder, but only for admin or if it's a process/doc_type/confidentiality folder for non-admin
+            if ($isAdmin || in_array($folder->type, ['process', 'document_type', 'confidentiality'])) {
+                foreach ($folder->documents as $d) {
+                    $nodes[] = [
+                        'type' => 'file',
+                        'id' => $d->id,
+                        'name' => $d->name,
+                        'full_path' => $d->full_path,
+                        'size' => number_format($d->size/1024/1024, 1) . ' MB',
+                        'lastModified' => $d->updated_at->format('Y-m-d'),
+                        'folder_path' => $folder->full_path,
+                        'mime_type' => $d->mime_type
+                    ];
+                }
+            }
+
+            // For non-admin, if this is a 'process' folder and its children are not yet loaded,
+            // we will not include its 'nodes' array in the initial hierarchy,
+            // but the `contents` endpoint will provide them.
+            // This is handled by the `getFilteredContents` in the controller.
+            $hierarchy[] = [
+                'type' => 'folder',
+                'id' => $folder->id,
+                'name' => $folder->name,
+                'full_path' => $folder->full_path,
+                'level' => $folder->level,
+                'folder_type' => $folder->type,
+                'is_protected' => $folder->isProtected(),
+                'is_user_created' => $folder->is_user_created,
+                // Only include nodes if admin, or if it's a process/document_type/confidentiality folder that needs to be shown
+                'nodes' => $nodes
+            ];
+        }
+
+        return $hierarchy;
+    }
+
+    /**
+     * Get contents of a specific folder based on user permissions.
+     *
+     * @param string $path The full path of the folder.
+     * @param bool $isAdmin Whether the current user is an admin.
+     * @return array
+     */
+    public static function getFilteredContents(string $path, bool $isAdmin): array
+    {
+        $folder = Folder::byPath($path)
+            ->with(['children', 'documents'])
+            ->first(); // Use first() instead of firstOrFail() to handle non-existent paths gracefully
+
+        if (!$folder) {
+            return []; // Folder not found
+        }
+
+        $nodes = [];
+
+        // Admins can see all contents
+        if ($isAdmin) {
+            foreach ($folder->children as $c) {
                 $nodes[] = [
-                    'type' => 'folder', // This was missing!
+                    'type' => 'folder',
                     'id' => $c->id,
                     'name' => $c->name,
                     'full_path' => $c->full_path,
@@ -113,12 +182,10 @@ class Folder extends Model
                     'folder_type' => $c->type,
                     'is_protected' => $c->isProtected(),
                     'is_user_created' => $c->is_user_created,
-                    'nodes' => static::getHierarchy($c->id) // Recursively get children
+                    // Children nodes are not pre-fetched here for performance, loaded on demand by frontend
                 ];
             }
-
-            // Add files under this folder
-            foreach ($f->documents as $d) {
+            foreach ($folder->documents as $d) {
                 $nodes[] = [
                     'type' => 'file',
                     'id' => $d->id,
@@ -126,22 +193,56 @@ class Folder extends Model
                     'full_path' => $d->full_path,
                     'size' => number_format($d->size/1024/1024, 1) . ' MB',
                     'lastModified' => $d->updated_at->format('Y-m-d'),
-                    'folder_path' => $f->full_path,
+                    'folder_path' => $folder->full_path,
                     'mime_type' => $d->mime_type
                 ];
             }
+        } else {
+            // Non-admin logic
+            // Allow access to contents of 'process', 'document_type', and 'confidentiality' folders.
+            // Also, allow access to children of 'root' (e.g. 'Original') and 'category' (e.g. 'Matiere') to find process folders.
+            if (in_array($folder->type, ['root', 'category', 'process', 'document_type', 'confidentiality'])) {
+                foreach ($folder->children as $c) {
+                    // For non-admin, ensure only permitted children are listed.
+                    // This is crucial to prevent unauthorized access to other folder types.
+                    if (in_array($c->type, ['process', 'document_type', 'confidentiality'])) {
+                         $nodes[] = [
+                            'type' => 'folder',
+                            'id' => $c->id,
+                            'name' => $c->name,
+                            'full_path' => $c->full_path,
+                            'level' => $c->level,
+                            'folder_type' => $c->type,
+                            'is_protected' => $c->isProtected(),
+                            'is_user_created' => $c->is_user_created,
+                        ];
+                    }
+                }
+                foreach ($folder->documents as $d) {
+                    $nodes[] = [
+                        'type' => 'file',
+                        'id' => $d->id,
+                        'name' => $d->name,
+                        'full_path' => $d->full_path,
+                        'size' => number_format($d->size/1024/1024, 1) . ' MB',
+                        'lastModified' => $d->updated_at->format('Y-m-d'),
+                        'folder_path' => $folder->full_path,
+                        'mime_type' => $d->mime_type
+                    ];
+                }
+            } else {
+                // If a non-admin tries to access an unauthorized folder type, return empty.
+                // Or you could throw an abort(403) here in the controller.
+                return [];
+            }
+        }
 
-            return [
-                'type' => 'folder', // This was missing!
-                'id' => $f->id,
-                'name' => $f->name,
-                'full_path' => $f->full_path,
-                'level' => $f->level,
-                'folder_type' => $f->type,
-                'is_protected' => $f->isProtected(),
-                'is_user_created' => $f->is_user_created,
-                'nodes' => $nodes
-            ];
-        })->toArray();
+        return $nodes;
+    }
+
+
+    public function isProtected(): bool
+    {
+        return (bool) $this->is_protected;
     }
 }
