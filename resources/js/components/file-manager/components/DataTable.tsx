@@ -347,12 +347,9 @@ export default function DataTable({
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Taille
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Dernière modification
-                  </th>
                 </>
               )}
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-30 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Actions
               </th>
             </tr>
@@ -410,9 +407,9 @@ export default function DataTable({
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {row.type === 'file' ? row.size || '-' : ''}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {/* <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {row.type === 'file' ? row.lastModified || '-' : ''}
-                    </td>
+                    </td> */}
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {row.type === 'file' && (
                             <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

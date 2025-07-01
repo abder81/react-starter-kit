@@ -64,21 +64,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/documents/view/{path}', [DocumentController::class, 'view'])
         ->where('path', '.*'); // Allow slashes in path
 
-    // User Management
-    Route::get('users', function () {
-        return Inertia::render('Users', [
-            'users' => User::all() // Pass all users to the component
-        ]);
-    })->name('users');
-
-    Route::post('/users', [UserController::class, 'store'])->name('users.store');
-    Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
-    Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
+    // Standard CRUD routes
+    Route::resource('users', UserController::class);
     
-    // Route to manage folder permissions for a specific user
-    Route::get('/users/{user}/permissions', [UserController::class, 'getPermissions'])->name('users.permissions.get');
-    Route::post('/users/{user}/permissions', [UserController::class, 'updatePermissions'])->name('users.permissions.update');
-
+    // Additional user management routes
+    Route::post('users/bulk-delete', [UserController::class, 'bulkDelete'])->name('users.bulk-delete');
+    Route::patch('users/{user}/toggle-admin', [UserController::class, 'toggleAdmin'])->name('users.toggle-admin');
+    
 });
 
 require __DIR__.'/settings.php';

@@ -17,7 +17,32 @@ class Document extends Model
      * @var array<int, string>
      */
     protected $fillable = [
-        'name', 'file_path', 'full_path', 'folder_id', 'mime_type', 'size'
+        'name',
+        'file_path',
+        'full_path',
+        'folder_id',
+        'mime_type',
+        'size',
+        'confidentiality_level',
+        'document_type',
+        'category',
+        'status',
+        'created_by',
+        'approved_by',
+        'approved_at',
+        'access_restrictions',
+        'download_count',
+        'last_accessed',
+        'requires_approval_to_view',
+    ];
+
+    protected $casts = [
+        'approved_at' => 'datetime',
+        'last_accessed' => 'datetime',
+        'access_restrictions' => 'array',
+        'requires_approval_to_view' => 'boolean',
+        'size' => 'integer',
+        'download_count' => 'integer',
     ];
 
     /**
@@ -50,6 +75,26 @@ class Document extends Model
     public function folder()
     {
         return $this->belongsTo(Folder::class);
+    }
+
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function approver()
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    public function accessLogs()
+    {
+        return $this->hasMany(DocumentAccessLog::class);
+    }
+
+    public function approvalRequests()
+    {
+        return $this->hasMany(DocumentApprovalRequest::class);
     }
 
     /**

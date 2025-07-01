@@ -17,19 +17,6 @@ import AppLogoIcon from './app-logo-icon';
 import { useState } from 'react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 
-const mainNavItems: NavItem[] = [
-    {
-        title: 'Documents',
-        href: '/dashboard',
-        icon: LayoutGrid,
-    },
-    {
-        title: 'Utilisateurs',
-        href: '/users',
-        icon: Users,
-    }
-];
-
 const rightNavItems: NavItem[] = [
     // {
     //     title: 'Repository',
@@ -82,6 +69,28 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
     const getInitials = useInitials();
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Conditionally set navigation items based on admin status
+    const mainNavItems: NavItem[] = auth.user && auth.user.is_admin
+        ? [
+            {
+                title: 'Documents',
+                href: '/dashboard',
+                icon: LayoutGrid,
+            },
+            {
+                title: 'Utilisateurs',
+                href: '/users',
+                icon: Users,
+            }
+        ]
+        : [
+            {
+                title: 'Documents',
+                href: '/dashboard',
+                icon: LayoutGrid,
+            }
+        ];
 
     return (
         <>

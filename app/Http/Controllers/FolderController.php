@@ -364,7 +364,6 @@ class FolderController extends Controller
                     'name' => $d->name,
                     'full_path' => $d->full_path,
                     'size' => number_format($d->size/1024/1024, 1) . ' MB',
-                    'lastModified' => $d->updated_at->format('Y-m-d'),
                     'folder_path' => $folder->full_path,
                     'mime_type' => $d->mime_type
                 ];

@@ -20,6 +20,7 @@ import UploadArchiveForm from './components/UploadArchiveForm';
 import { usePage } from '@inertiajs/react';
 import { type SharedData } from '@/types';
 
+
 // Helper function to get CSRF token
 const getCsrfToken = () => {
   return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';

@@ -21,6 +21,10 @@ return new class extends Migration
             ['root','category','process','document_type','confidentiality','custom'])->default('root');
             $table->boolean('is_user_created')->default(false);
             $table->boolean('is_protected')->default(false);
+            $table->json('role_restrictions')->nullable(); // Roles that can access this folder
+            $table->json('user_restrictions')->nullable(); // Specific users that can access
+            $table->boolean('requires_approval')->default(false);
+            $table->string('access_level')->default('normal'); // normal, restricted, confidential
             $table->timestamps();
             $table->foreign('parent_id')->references('id')->on('folders')->onDelete('cascade');
             $table->index(['parent_id','level']);

@@ -18,15 +18,20 @@ class Folder extends Model
         'parent_id',
         'level',
         'type',
-        'is_user_created',
-        'is_protected'
+        'is_protected',
+        'role_restrictions',
+        'user_restrictions',
+        'requires_approval',
+        'access_level',
     ];
 
     protected $casts = [
-        'is_user_created' => 'boolean',
         'is_protected' => 'boolean',
+        'requires_approval' => 'boolean',
+        'role_restrictions' => 'array',
+        'user_restrictions' => 'array',
     ];
-
+    
     protected static function boot()
     {
         parent::boot();
