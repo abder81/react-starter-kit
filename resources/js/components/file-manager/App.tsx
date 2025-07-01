@@ -19,6 +19,7 @@ import Modal from './components/Modal';
 import UploadArchiveForm from './components/UploadArchiveForm';
 import { usePage } from '@inertiajs/react';
 import { type SharedData } from '@/types';
+import { AuthProvider, useAuth } from './components/AuthContext';
 
 
 // Helper function to get CSRF token
@@ -35,25 +36,7 @@ const getDefaultHeaders = () => {
   };
 };
 
-/**
- * Authentication Hook that uses Inertia's auth state.
- * @returns An object containing the current user's admin status.
- */
-const useAuth = (): { isAdmin: boolean, auth: Auth } => {
-  const page = usePage<SharedData>();
-  const { auth } = page.props;
-  
-  // If no user is logged in, they are not an admin
-  if (!auth.user) {
-    return { isAdmin: false, auth: { user: null } };
-  }
-
-  // Use the actual is_admin value from the user object
-  const isAdmin = auth.user.is_admin === true;
-  return { isAdmin, auth };
-};
-
-export default function App() {
+function AppContent() {
   const MIN_WIDTH = 280;
   const MAX_WIDTH = 600;
 
@@ -97,8 +80,8 @@ export default function App() {
 
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // Get admin status from our auth hook
-  const { isAdmin } = useAuth();
+  // Use the new useAuth hook from AuthContext
+  const { can } = useAuth();
 
   // Optimized API functions with better error handling
   const fetchHierarchy = useCallback(async (): Promise<Node[]> => {
@@ -842,50 +825,31 @@ export default function App() {
 
   const canCreateFolder = useMemo(() => {
     if (!selectedNode) return false;
-    
-    // Don't allow creating folders under protected folders, except for root and category folders
-    if (selectedNode.is_protected && !['root', 'category'].includes(selectedNode.folder_type || '')) return false;
-    
-    // Allow creating folders under any user-created folder
-    if (selectedNode.isUserCreated) return true;
-    
-    // Allow creating folders under predefined folder types
-    const allowedParentTypes: Array<Node['folder_type']> = ['root', 'category', 'process', 'document_type', 'confidentiality'];
-    return allowedParentTypes.includes(selectedNode.folder_type);
-  }, [selectedNode]);
+    // The logic to decide *where* a folder can be created remains the same,
+    // but we add a permission check.
+    const isAllowedParentType = ['root', 'category', 'process', 'document_type', 'confidentiality'].includes(selectedNode.folder_type || '') || selectedNode.isUserCreated;
+    return can('folders.create') && isAllowedParentType;
+  }, [selectedNode, can]);
 
   const canUploadFile = useMemo(() => {
     if (!selectedNode) return false;
-    
-    // Allow uploading to confidentiality folders directly
-    if (selectedNode.folder_type === 'confidentiality') return true;
-    
-    // Allow uploading to user-created folders
-    if (selectedNode.isUserCreated) return true;
-    
-    // Check if this folder is a descendant of a confidentiality folder
-    const isDescendantOfConfidentiality = (node: Node | null): boolean => {
-      if (!node) return false;
-      if (node.folder_type === 'confidentiality') return true;
-      
-      // Find parent in hierarchy
-      const parentPath = node.full_path.split('/').slice(0, -1).join('/');
-      if (!parentPath) return false;
-      
-      const parentNode = findNode(hierarchy, parentPath);
-      return isDescendantOfConfidentiality(parentNode);
-    };
-    
-    return isDescendantOfConfidentiality(selectedNode);
-  }, [selectedNode, hierarchy]);
+    // Your existing logic for uploadable locations
+    const isUploadableLocation = selectedNode.folder_type === 'confidentiality' || selectedNode.isUserCreated;
+    return can('documents.upload') && isUploadableLocation;
+  }, [selectedNode, can]);
 
   useEffect(() => {
-    if (!isAdmin && selectedPath) {
-      // Find the selected node
-      const selectedNode = findNode(hierarchy, selectedPath);
-      
-      // For non-admin users, fetch full descendants when selecting any folder
-      if (selectedNode && selectedNode.type === 'folder') {
+    if (selectedPath) {
+      const node = findNode(hierarchy, selectedPath);
+      // If node is missing, or it's a folder and its nodes are missing or incomplete (no files at this level)
+      if (
+        !node ||
+        (node.type === 'folder' && (
+          !node.nodes ||
+          // Fetch if there are no files at this level, even if there are subfolders
+          !node.nodes.some(n => n.type === 'file')
+        ))
+      ) {
         fetchDescendants(selectedPath)
           .then(fullNode => {
             setHierarchy(prev => updateNodeInHierarchy(prev, selectedPath, () => fullNode));
@@ -895,7 +859,7 @@ export default function App() {
           });
       }
     }
-  }, [isAdmin, selectedPath, fetchDescendants]);
+  }, [selectedPath, hierarchy, fetchDescendants]);
 
   if (loading && hierarchy.length === 0) {
     return (
@@ -933,7 +897,6 @@ export default function App() {
           hierarchy={hierarchy}
           loading={loading}
           onUpdateHierarchy={onUpdateHierarchy}
-          isAdmin={isAdmin} 
         />
       </aside>
       
@@ -978,19 +941,19 @@ export default function App() {
               )}
             </div>
             
-            {selectedPath && !isSearching && isAdmin && (
+            {selectedPath && !isSearching && (
               <div className="flex items-center gap-2">
                 {canCreateFolder && (
                     <button
-                    onClick={() => setShowCreateFolderModal(true)}
-                    disabled={loading}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
+                      onClick={() => setShowCreateFolderModal(true)}
+                      disabled={loading}
+                      className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
                     >
-                    <FolderPlus className="h-4 w-4" /> Créer dossier
+                      <FolderPlus className="h-4 w-4" /> Créer dossier
                     </button>
                 )}
                 
-                {selectedNode?.type === 'folder' && !selectedNode?.is_protected && (
+                {can('folders.edit') && selectedNode?.type === 'folder' && !selectedNode?.is_protected && (
                     <button
                         onClick={() => handleRenameFolder(selectedPath)}
                         disabled={loading}
@@ -1000,7 +963,7 @@ export default function App() {
                     </button>
                 )}
                 
-                {!isDeleteDisabled && (
+                {can('folders.delete') && !isDeleteDisabled && (
                     <button
                         onClick={() => setShowDeleteModal(true)}
                         disabled={loading}
@@ -1069,7 +1032,6 @@ export default function App() {
               onDownload={handleBulkDownload}
               onPrint={handleBulkPrint}
               onOpenFile={handleOpenFile}
-              isAdmin={isAdmin}
             />
           )}
         </div>
@@ -1268,5 +1230,13 @@ export default function App() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

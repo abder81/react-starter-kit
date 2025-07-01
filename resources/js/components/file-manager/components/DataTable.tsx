@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Node } from '../types';
+import { useAuth } from './AuthContext';
 import { 
     FileText, 
     Folder, 
@@ -28,7 +29,6 @@ interface DataTableProps {
   onDownload?: (paths: string[]) => void;
   onPrint?: (paths: string[]) => void;
   onOpenFile?: (path: string) => void;
-  isAdmin: boolean;
 }
 
 // Helpers
@@ -66,7 +66,7 @@ const isPdfFile = (filename: string, mimeType?: string): boolean => {
   return mimeType === 'application/pdf' || filename.toLowerCase().endsWith('.pdf');
 };
 
-// UPDATED: Helper to get file icon based on type, as per your request
+// Helper to get file icon based on type
 const getFileIcon = (mimeType: string | undefined) => {
     if (!mimeType) return <FileIcon className="h-5 w-5 text-gray-500" />;
   
@@ -111,9 +111,18 @@ export default function DataTable({
   onDownload,
   onPrint,
   onOpenFile,
-  isAdmin,
 }: DataTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const { can } = useAuth();
+
+  // Check permissions
+  const canDelete = can('documents.delete');
+  const canEdit = can('documents.edit');
+  const canArchive = can('documents.archive');
+  const canView = can('documents.view');
+  const canDownload = can('documents.download');
+  const canPrint = can('documents.print');
+  const isAdmin = can('admin.access'); // For backward compatibility checks
 
   // Update the useMemo section in DataTable.tsx
   const { rows, showActions } = useMemo(() => {
@@ -216,21 +225,21 @@ export default function DataTable({
 
   // Bulk actions handlers
   const handleBulkDelete = () => {
-    if (selectedFiles.length > 0 && isAdmin) {
+    if (selectedFiles.length > 0 && canDelete) {
       onDelete(selectedFiles);
       setSelectedFiles([]);
     }
   };
 
   const handleBulkDownload = () => {
-    if (onDownload && selectedFiles.length > 0) {
+    if (onDownload && selectedFiles.length > 0 && canDownload) {
       onDownload(selectedFiles);
       setSelectedFiles([]);
     }
   };
     
   const handleBulkPrint = () => {
-    if (onPrint && selectedFiles.length > 0) {
+    if (onPrint && selectedFiles.length > 0 && canPrint) {
         onPrint(selectedFiles);
         setSelectedFiles([]);
     }
@@ -240,7 +249,7 @@ export default function DataTable({
   const handleRowClick = (item: Node) => {
     if (item.type === 'folder') {
       onSelect(item.full_path);
-    } else if (item.type === 'file' && onOpenFile) {
+    } else if (item.type === 'file' && onOpenFile && canView) {
       // For files, trigger the open file action
       onOpenFile(item.full_path);
     }
@@ -249,7 +258,7 @@ export default function DataTable({
   // Handle file opening (PDF viewing)
   const handleOpenFile = (item: Node, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onOpenFile) {
+    if (onOpenFile && canView) {
       onOpenFile(item.full_path);
     }
   };
@@ -257,7 +266,7 @@ export default function DataTable({
   // Handle download single file
   const handleDownloadFile = (item: Node, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onDownload) {
+    if (onDownload && canDownload) {
       onDownload([item.full_path]);
     }
   };
@@ -265,7 +274,7 @@ export default function DataTable({
   // Handle print single file
   const handlePrintFile = (item: Node, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onPrint) {
+    if (onPrint && canPrint) {
       onPrint([item.full_path]);
     }
   };
@@ -280,6 +289,20 @@ export default function DataTable({
       // ... grid view JSX ...
   }
 
+  // Don't render if user doesn't have view permission
+  if (!canView) {
+    return (
+      <div className="text-center py-20">
+        <div className="text-lg font-medium text-gray-900 mb-2">
+          Accès non autorisé
+        </div>
+        <p className="text-sm text-gray-500">
+          Vous n'avez pas les permissions nécessaires pour voir les documents.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div>
       {/* Bulk actions bar */}
@@ -291,7 +314,7 @@ export default function DataTable({
                 </span>
             </div>
             <div className="flex items-center gap-2">
-                {onDownload && (
+                {onDownload && canDownload && (
                 <button
                     onClick={handleBulkDownload}
                     className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
@@ -300,7 +323,7 @@ export default function DataTable({
                     <Download className="h-4 w-4" />
                 </button>
                 )}
-                {onPrint && (
+                {onPrint && canPrint && (
                 <button
                     onClick={handleBulkPrint}
                     className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
@@ -309,7 +332,7 @@ export default function DataTable({
                     <Printer className="h-4 w-4" />
                 </button>
                 )}
-                {isAdmin && (
+                {canDelete && (
                     <button
                     onClick={handleBulkDelete}
                     className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
@@ -360,7 +383,7 @@ export default function DataTable({
                 key={row.full_path}
                 className={`hover:bg-gray-50 transition-colors group ${
                   selectedFiles.includes(row.full_path) ? 'bg-blue-50' : ''
-                } ${row.type === 'folder' || row.type === 'file' ? 'cursor-pointer' : ''}`}
+                } ${row.type === 'folder' || (row.type === 'file' && canView) ? 'cursor-pointer' : ''}`}
                 onClick={() => handleRowClick(row)}
               >
                 {!showActions && (
@@ -391,7 +414,7 @@ export default function DataTable({
                       {row.name}
                     </div>
                     {/* Show clickable indicator for files */}
-                    {row.type === 'file' && (
+                    {row.type === 'file' && canView && (
                       <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <span className="text-xs text-gray-400">
                           {isPdfFile(row.name, row.mime_type) ? 'Cliquer pour ouvrir' : 'Cliquer pour télécharger'}
@@ -407,42 +430,41 @@ export default function DataTable({
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {row.type === 'file' ? row.size || '-' : ''}
                     </td>
-                    {/* <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {row.type === 'file' ? row.lastModified || '-' : ''}
-                    </td> */}
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {row.type === 'file' && (
                             <div className="flex justify-end items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* Read-only actions for all users */}
-                                {onOpenFile && (
+                                {/* Read-only actions for all users with permissions */}
+                                {onOpenFile && canView && (
                                   <button onClick={(e) => handleOpenFile(row, e)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title={isPdfFile(row.name, row.mime_type) ? "Ouvrir" : "Télécharger"}>
                                         {isPdfFile(row.name, row.mime_type) ? <Eye className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
                                   </button>
                                 )}
-                                {onDownload && (
+                                {onDownload && canDownload && (
                                   <button onClick={(e) => handleDownloadFile(row, e)} className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded" title="Télécharger">
                                         <Download className="h-4 w-4" />
                                   </button>
                                 )}
-                                {onPrint && isPdfFile(row.name, row.mime_type) && (
+                                {onPrint && canPrint && isPdfFile(row.name, row.mime_type) && (
                                   <button onClick={(e) => handlePrintFile(row, e)} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded" title="Imprimer">
                                     <Printer className="h-4 w-4" />
                                   </button>
                                 )}
                                 
-                                {/* Admin-only actions */}
-                                {isAdmin && (
-                                    <>
-                                        <button onClick={(e) => handleActionClick(e, () => onArchive(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Archiver">
-                                            <Archive className="h-4 w-4" />
-                                        </button>
-                                        <button onClick={(e) => handleActionClick(e, () => onRename(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Renommer">
-                                            <Edit2 className="h-4 w-4" />
-                                        </button>
-                                        <button onClick={(e) => handleActionClick(e, () => onDelete([row.full_path]))} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Supprimer">
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </>
+                                {/* Permission-based actions */}
+                                {canArchive && (
+                                    <button onClick={(e) => handleActionClick(e, () => onArchive(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Archiver">
+                                        <Archive className="h-4 w-4" />
+                                    </button>
+                                )}
+                                {canEdit && (
+                                    <button onClick={(e) => handleActionClick(e, () => onRename(row.full_path))} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="Renommer">
+                                        <Edit2 className="h-4 w-4" />
+                                    </button>
+                                )}
+                                {canDelete && (
+                                    <button onClick={(e) => handleActionClick(e, () => onDelete([row.full_path]))} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Supprimer">
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
                                 )}
                             </div>
                         )}

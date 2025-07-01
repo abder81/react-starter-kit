@@ -10,27 +10,28 @@ import { UserMenuContent } from '@/components/user-menu-content';
 import { useInitials } from '@/hooks/use-initials';
 import { usePage } from '@inertiajs/react';
 import { type SharedData } from '@/types';
+import { useAuth } from './AuthContext';
 
-interface SidebarProps {
+type SidebarProps = {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   hierarchy: Node[];
   loading: boolean;
   onUpdateHierarchy: (updater: (hierarchy: Node[]) => Node[]) => void;
-  isAdmin: boolean;
-}
+};
 
 export function Sidebar({ 
   selectedPath, 
   onSelect, 
   hierarchy, 
   loading,
-  onUpdateHierarchy,
-  isAdmin
+  onUpdateHierarchy
 }: SidebarProps) {
   const page = usePage<SharedData>();
   const { auth } = page.props;
   const getInitials = useInitials();
+  const { user } = useAuth();
+  const isAdmin = !!user?.is_admin;
 
   // Function to fetch folder contents and update hierarchy
   const handleLoadChildren = useCallback(async (path: string) => {
@@ -118,7 +119,6 @@ export function Sidebar({
             {(isAdmin
               ? hierarchy
               : (() => {
-                  // For non-admins, only show categories under 'Original' (hide 'Obsolete' and all else)
                   const original = hierarchy.find(node => node.name === 'Original');
                   return original && Array.isArray(original.nodes) ? original.nodes : [];
                 })()
@@ -131,7 +131,6 @@ export function Sidebar({
                 onSelect={onSelect}
                 onLoadChildren={handleLoadChildren}
                 loading={loading}
-                isAdmin={isAdmin}
               />
             ))}
           </ul>

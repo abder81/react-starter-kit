@@ -182,13 +182,13 @@ export const convertApiToNode = (apiData: ApiFolder | ApiFile | any): Node => {
 };
 
 // --- START PERMISSION CHANGES ---
-// Mockup of user/auth types for permission checking.
-// In a real app, this would be defined based on your authentication system.
+// Update the User type to include the new `permissions` array.
 export type User = {
     id: number;
     name: string;
     email: string;
-    is_admin: boolean; // <-- Added admin flag
+    is_admin: boolean;
+    permissions: string[]; // Array of permission names, e.g., ['documents.view', 'folders.create']
 };
 
 export type Auth = {
@@ -198,5 +198,6 @@ export type Auth = {
 // This type would typically be in a global types file for Inertia.js
 export type SharedData = {
     auth: Auth;
+    // ... any other shared data
 };
 // --- END PERMISSION CHANGES ---

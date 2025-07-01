@@ -2,6 +2,7 @@
 import React, { useState, useEffect, memo } from 'react';
 import { ChevronRight, Folder } from 'lucide-react';
 import { Node } from '../types';
+import { useAuth } from './AuthContext';
 
 // Recursively checks if a node or any descendant matches the target path.
 const contains = (
@@ -38,7 +39,6 @@ interface TreeItemProps {
   onSelect: (path: string) => void;
   onLoadChildren?: (path: string) => Promise<void>;
   loading?: boolean;
-  isAdmin: boolean;
 }
 
 export const TreeItem = memo(function TreeItem({
@@ -48,10 +48,11 @@ export const TreeItem = memo(function TreeItem({
   onSelect,
   onLoadChildren,
   loading = false,
-  isAdmin,
 }: TreeItemProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoadingChildren, setIsLoadingChildren] = useState(false);
+  const { user } = useAuth();
+  const isAdmin = !!user?.is_admin;
 
   // Only show folder children in the tree
   const folderChildren = isFolder(node) ? node.nodes?.filter(isFolder) ?? [] : [];
@@ -111,35 +112,30 @@ export const TreeItem = memo(function TreeItem({
   // In TreeItem.tsx, modify the getNodeIcon function:
   const getNodeIcon = () => {
     const depth = path.split('/').length;
-    
-    // For non-admin users, adjust depth calculation since we're skipping level 1
     const adjustedDepth = !isAdmin ? depth + 1 : depth;
-    
     if (isAdmin) {
-      // Admin users: keep original color scheme
       switch (adjustedDepth) {
-          case 1: // Root level (only for admin)
-              return <Folder className="h-4 w-4 text-gray-600" />;
-          case 2: // Categories (Pilotage, Réalisation, Support)
-              return <Folder className="h-4 w-4 text-blue-600" />;
-          case 3: // Processes (PSP-01, etc.)
-              return <Folder className="h-4 w-4 text-green-600" />;
-          case 4: // Document types
-              return <Folder className="h-4 w-4 text-orange-600" />;
-          default: // Confidentiality levels
-              return <Folder className="h-4 w-4 text-purple-600" />;
+        case 1:
+          return <Folder className="h-4 w-4 text-gray-600" />;
+        case 2:
+          return <Folder className="h-4 w-4 text-blue-600" />;
+        case 3:
+          return <Folder className="h-4 w-4 text-green-600" />;
+        case 4:
+          return <Folder className="h-4 w-4 text-orange-600" />;
+        default:
+          return <Folder className="h-4 w-4 text-purple-600" />;
       }
     } else {
-      // Non-admin users: blue → green → red → purple progression
       switch (adjustedDepth) {
-          case 3: // Processes (PSP-01, etc.) - Second level
-              return <Folder className="h-4 w-4 text-gray-600" />;
-          case 4: // Document types (Procédures, Instructions, etc.) - Third level
-              return <Folder className="h-4 w-4 text-blue-600" />;
-          case 5: // Document types (Procédures, Instructions, etc.) - Third level
-              return <Folder className="h-4 w-4 text-green-600" />;
-          default: // Confidentiality levels (Interne, Public, etc.) - Fourth level
-              return <Folder className="h-4 w-4 text-purple-600" />;
+        case 3:
+          return <Folder className="h-4 w-4 text-gray-600" />;
+        case 4:
+          return <Folder className="h-4 w-4 text-blue-600" />;
+        case 5:
+          return <Folder className="h-4 w-4 text-green-600" />;
+        default:
+          return <Folder className="h-4 w-4 text-purple-600" />;
       }
     }
   };
@@ -210,7 +206,6 @@ export const TreeItem = memo(function TreeItem({
                 onSelect={onSelect}
                 onLoadChildren={onLoadChildren}
                 loading={loading}
-                isAdmin={isAdmin}
               />
             ))}
           </ul>
